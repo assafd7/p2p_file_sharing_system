@@ -1,0 +1,445 @@
+from PyQt6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QPushButton, QLabel, QStatusBar, QMessageBox,
+    QFileDialog, QProgressBar, QMenu, QSystemTrayIcon,
+    QTabWidget, QTreeWidget, QListWidgetItem, QInputDialog
+)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
+from PyQt6.QtGui import QIcon, QAction
+import logging
+from typing import Dict, List, Optional
+from datetime import datetime
+
+class TransferWorker(QThread):
+    progress_updated = pyqtSignal(str, float, str)  # transfer_id, progress, status
+    transfer_completed = pyqtSignal(str, bool)  # transfer_id, success
+
+    def __init__(self, transfer_id: str, file_manager, parent=None):
+        super().__init__(parent)
+        self.transfer_id = transfer_id
+        self.file_manager = file_manager
+        self.is_running = True
+
+    def run(self):
+        while self.is_running:
+            status = self.file_manager.get_transfer_status(self.transfer_id)
+            if status:
+                progress, status_text = status
+                self.progress_updated.emit(self.transfer_id, progress, status_text)
+                if progress >= 1.0 or status_text.startswith("failed"):
+                    self.is_running = False
+                    self.transfer_completed.emit(self.transfer_id, progress >= 1.0)
+            self.msleep(100)  # Update every 100ms
+
+    def stop(self):
+        self.is_running = False
+
+class MainWindow(QMainWindow):
+    def __init__(self, file_manager, network_manager, db_manager):
+        super().__init__()
+        self.file_manager = file_manager
+        self.network_manager = network_manager
+        self.db_manager = db_manager
+        self.logger = logging.getLogger("MainWindow")
+        self.transfer_workers: Dict[str, TransferWorker] = {}
+
+        self.setWindowTitle("P2P File Sharing System")
+        self.setMinimumSize(800, 600)
+
+        # Create central widget and main layout
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+
+        # Create tab widget
+        self.tab_widget = QTabWidget()
+        main_layout.addWidget(self.tab_widget)
+
+        # Create tabs
+        self.setup_files_tab()
+        self.setup_transfers_tab()
+        self.setup_peers_tab()
+        self.setup_settings_tab()
+
+        # Create status bar
+        self.statusBar().showMessage("Ready")
+
+        # Setup menu bar
+        self.setup_menu_bar()
+
+        # Setup periodic updates
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self.update_ui)
+        self.update_timer.start(1000)  # Update every second
+
+    def setup_files_tab(self):
+        """Setup the files tab with file list and controls."""
+        files_tab = QWidget()
+        layout = QVBoxLayout(files_tab)
+
+        # Create file list
+        self.file_list = QTreeWidget()
+        self.file_list.setHeaderLabels(["Name", "Size", "Owner", "Last Modified"])
+        self.file_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.file_list.customContextMenuRequested.connect(self.show_file_context_menu)
+        layout.addWidget(self.file_list)
+
+        # Create file controls
+        controls_layout = QHBoxLayout()
+        
+        self.share_button = QPushButton("Share File")
+        self.share_button.clicked.connect(self.share_file)
+        controls_layout.addWidget(self.share_button)
+
+        self.download_button = QPushButton("Download")
+        self.download_button.clicked.connect(self.download_file)
+        controls_layout.addWidget(self.download_button)
+
+        layout.addLayout(controls_layout)
+        self.tab_widget.addTab(files_tab, "Files")
+
+    def setup_transfers_tab(self):
+        """Setup the transfers tab with transfer list and progress bars."""
+        transfers_tab = QWidget()
+        layout = QVBoxLayout(transfers_tab)
+
+        # Create transfer list
+        self.transfer_list = QTreeWidget()
+        self.transfer_list.setHeaderLabels(["File", "Progress", "Status", "Speed"])
+        layout.addWidget(self.transfer_list)
+
+        # Create transfer controls
+        controls_layout = QHBoxLayout()
+        
+        self.pause_button = QPushButton("Pause")
+        self.pause_button.clicked.connect(self.pause_transfer)
+        controls_layout.addWidget(self.pause_button)
+
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.cancel_transfer)
+        controls_layout.addWidget(self.cancel_button)
+
+        layout.addLayout(controls_layout)
+        self.tab_widget.addTab(transfers_tab, "Transfers")
+
+    def setup_peers_tab(self):
+        """Setup the peers tab with peer list and connection controls."""
+        peers_tab = QWidget()
+        layout = QVBoxLayout(peers_tab)
+
+        # Create peer list
+        self.peer_list = QTreeWidget()
+        self.peer_list.setHeaderLabels(["ID", "Address", "Status", "Last Seen"])
+        layout.addWidget(self.peer_list)
+
+        # Create peer controls
+        controls_layout = QHBoxLayout()
+        
+        self.connect_button = QPushButton("Connect")
+        self.connect_button.clicked.connect(self.connect_to_peer)
+        controls_layout.addWidget(self.connect_button)
+
+        self.disconnect_button = QPushButton("Disconnect")
+        self.disconnect_button.clicked.connect(self.disconnect_from_peer)
+        controls_layout.addWidget(self.disconnect_button)
+
+        layout.addLayout(controls_layout)
+        self.tab_widget.addTab(peers_tab, "Peers")
+
+    def setup_settings_tab(self):
+        """Setup the settings tab with configuration options."""
+        settings_tab = QWidget()
+        layout = QVBoxLayout(settings_tab)
+
+        # Network settings
+        network_group = QWidget()
+        network_layout = QVBoxLayout(network_group)
+        
+        port_layout = QHBoxLayout()
+        port_layout.addWidget(QLabel("Port:"))
+        self.port_input = QLineEdit()
+        self.port_input.setText("8000")
+        port_layout.addWidget(self.port_input)
+        network_layout.addLayout(port_layout)
+
+        # Storage settings
+        storage_group = QWidget()
+        storage_layout = QVBoxLayout(storage_group)
+        
+        storage_path_layout = QHBoxLayout()
+        storage_path_layout.addWidget(QLabel("Storage Path:"))
+        self.storage_path_input = QLineEdit()
+        self.storage_path_input.setReadOnly(True)
+        storage_path_layout.addWidget(self.storage_path_input)
+        browse_button = QPushButton("Browse")
+        browse_button.clicked.connect(self.browse_storage_path)
+        storage_path_layout.addWidget(browse_button)
+        storage_layout.addLayout(storage_path_layout)
+
+        # Add groups to main layout
+        layout.addWidget(network_group)
+        layout.addWidget(storage_group)
+        layout.addStretch()
+
+        self.tab_widget.addTab(settings_tab, "Settings")
+
+    def setup_menu_bar(self):
+        """Setup the menu bar with actions."""
+        menubar = self.menuBar()
+
+        # File menu
+        file_menu = menubar.addMenu("File")
+        
+        share_action = QAction("Share File", self)
+        share_action.triggered.connect(self.share_file)
+        file_menu.addAction(share_action)
+        
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+
+        # View menu
+        view_menu = menubar.addMenu("View")
+        
+        refresh_action = QAction("Refresh", self)
+        refresh_action.triggered.connect(self.update_ui)
+        view_menu.addAction(refresh_action)
+
+        # Help menu
+        help_menu = menubar.addMenu("Help")
+        
+        about_action = QAction("About", self)
+        about_action.triggered.connect(self.show_about)
+        help_menu.addAction(about_action)
+
+    def show_file_context_menu(self, position):
+        """Show context menu for file list items."""
+        item = self.file_list.itemAt(position)
+        if not item:
+            return
+
+        menu = QMenu()
+        
+        download_action = QAction("Download", self)
+        download_action.triggered.connect(lambda: self.download_file(item))
+        menu.addAction(download_action)
+        
+        share_action = QAction("Share", self)
+        share_action.triggered.connect(lambda: self.share_file(item))
+        menu.addAction(share_action)
+        
+        delete_action = QAction("Delete", self)
+        delete_action.triggered.connect(lambda: self.delete_file(item))
+        menu.addAction(delete_action)
+
+        menu.exec(self.file_list.viewport().mapToGlobal(position))
+
+    def share_file(self):
+        """Share a file with peers."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select File to Share",
+            "",
+            "All Files (*.*)"
+        )
+        if file_path:
+            try:
+                self.file_manager.add_file(file_path)
+                self.show_info(f"File shared: {file_path}")
+                self.update_file_list()
+            except Exception as e:
+                self.show_error(f"Error sharing file: {e}")
+
+    def download_file(self):
+        """Download a selected file."""
+        selected_items = self.file_list.selectedItems()
+        if not selected_items:
+            self.show_warning("Please select a file to download")
+            return
+
+        file_info = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        try:
+            save_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save File",
+                file_info.name,
+                "All Files (*.*)"
+            )
+            if save_path:
+                self.file_manager.download_file(file_info.id, save_path)
+                self.show_info(f"Downloading: {file_info.name}")
+                self.update_transfer_list()
+        except Exception as e:
+            self.show_error(f"Error downloading file: {e}")
+
+    def delete_file(self):
+        """Delete a selected file."""
+        selected_items = self.file_list.selectedItems()
+        if not selected_items:
+            self.show_warning("Please select a file to delete")
+            return
+
+        file_info = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        reply = QMessageBox.question(
+            self,
+            "Confirm Deletion",
+            f"Are you sure you want to delete {file_info.name}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                self.file_manager.delete_file(file_info.id)
+                self.show_info(f"File deleted: {file_info.name}")
+                self.update_file_list()
+            except Exception as e:
+                self.show_error(f"Error deleting file: {e}")
+
+    def pause_transfer(self):
+        """Pause a selected transfer."""
+        selected_items = self.transfer_list.selectedItems()
+        if not selected_items:
+            self.show_warning("Please select a transfer to pause")
+            return
+
+        transfer_info = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        try:
+            self.file_manager.pause_transfer(transfer_info.id)
+            self.show_info(f"Transfer paused: {transfer_info.file_name}")
+            self.update_transfer_list()
+        except Exception as e:
+            self.show_error(f"Error pausing transfer: {e}")
+
+    def cancel_transfer(self):
+        """Cancel a selected transfer."""
+        selected_items = self.transfer_list.selectedItems()
+        if not selected_items:
+            self.show_warning("Please select a transfer to cancel")
+            return
+
+        transfer_info = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        reply = QMessageBox.question(
+            self,
+            "Confirm Cancellation",
+            f"Are you sure you want to cancel {transfer_info.file_name}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                self.file_manager.cancel_transfer(transfer_info.id)
+                self.show_info(f"Transfer cancelled: {transfer_info.file_name}")
+                self.update_transfer_list()
+            except Exception as e:
+                self.show_error(f"Error cancelling transfer: {e}")
+
+    def connect_to_peer(self):
+        """Connect to a peer."""
+        address, ok = QInputDialog.getText(
+            self,
+            "Connect to Peer",
+            "Enter peer address (host:port):"
+        )
+        if ok and address:
+            try:
+                host, port = address.split(":")
+                self.network_manager.connect_to_peer(host, int(port))
+                self.show_info(f"Connected to peer: {address}")
+                self.update_peer_list()
+            except Exception as e:
+                self.show_error(f"Error connecting to peer: {e}")
+
+    def disconnect_from_peer(self):
+        """Disconnect from a selected peer."""
+        selected_items = self.peer_list.selectedItems()
+        if not selected_items:
+            self.show_warning("Please select a peer to disconnect")
+            return
+
+        peer_info = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        try:
+            self.network_manager.disconnect_from_peer(peer_info.id)
+            self.show_info(f"Disconnected from peer: {peer_info.address}")
+            self.update_peer_list()
+        except Exception as e:
+            self.show_error(f"Error disconnecting from peer: {e}")
+
+    def browse_storage_path(self):
+        """Open dialog to select storage path."""
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Storage Directory",
+            self.storage_path_input.text()
+        )
+        if path:
+            self.storage_path_input.setText(path)
+
+    def show_about(self):
+        """Show about dialog."""
+        QMessageBox.about(
+            self,
+            "About P2P File Sharing System",
+            "A secure and efficient peer-to-peer file sharing system.\n\n"
+            "Version 1.0.0\n"
+            "© 2024 Your Name"
+        )
+
+    def update_ui(self):
+        """Update UI elements with current data."""
+        # Update file list
+        self.update_file_list()
+        
+        # Update transfer list
+        self.update_transfer_list()
+        
+        # Update peer list
+        self.update_peer_list()
+
+    def update_file_list(self):
+        """Update the file list display."""
+        self.file_list.clear()
+        files = self.file_manager.get_shared_files()
+        for file_info in files:
+            item = QListWidgetItem(file_info.name)
+            item.setData(Qt.ItemDataRole.UserRole, file_info)
+            self.file_list.addItem(item)
+
+    def update_transfer_list(self):
+        """Update the transfer list display."""
+        self.transfer_list.clear()
+        transfers = self.file_manager.get_active_transfers()
+        for transfer_info in transfers:
+            item = QListWidgetItem(transfer_info.file_name)
+            item.setData(Qt.ItemDataRole.UserRole, transfer_info)
+            self.transfer_list.addItem(item)
+
+    def update_peer_list(self):
+        """Update the peer list display."""
+        self.peer_list.clear()
+        peers = self.network_manager.get_connected_peers()
+        for peer_info in peers:
+            item = QListWidgetItem(f"{peer_info.address}:{peer_info.port}")
+            item.setData(Qt.ItemDataRole.UserRole, peer_info)
+            self.peer_list.addItem(item)
+
+    def cleanup(self):
+        """Clean up resources before closing."""
+        try:
+            # Stop all transfers
+            self.file_manager.cancel_all_transfers()
+            
+            # Disconnect from all peers
+            self.network_manager.disconnect_all_peers()
+            
+            # Close database connection
+            self.db_manager.close()
+            
+            # Save settings
+            self.save_settings()
+            
+            self.show_info("Cleanup completed")
+        except Exception as e:
+            self.show_error(f"Error during cleanup: {e}")
+
+    def closeEvent(self, event):
+        """Handle window close event."""
+        self.cleanup()
+        event.accept() 
