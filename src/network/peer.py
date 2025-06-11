@@ -35,24 +35,54 @@ class Peer:
     async def connect(self) -> bool:
         """Establish connection with the peer."""
         try:
-            self.reader, self.writer = await asyncio.wait_for(
-                asyncio.open_connection(self.host, self.port),
-                timeout=CONNECTION_TIMEOUT
-            )
+            # Validate host and port
+            if not self.host or not self.port:
+                self.logger.error("Invalid host or port")
+                return False
+
+            # Try to resolve hostname
+            try:
+                socket.gethostbyname(self.host)
+            except socket.gaierror:
+                self.logger.error(f"Could not resolve hostname: {self.host}")
+                return False
+
+            # Attempt connection with timeout
+            try:
+                self.reader, self.writer = await asyncio.wait_for(
+                    asyncio.open_connection(self.host, self.port),
+                    timeout=CONNECTION_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                self.logger.error(f"Connection timeout to {self.host}:{self.port}")
+                return False
+            except ConnectionRefusedError:
+                self.logger.error(f"Connection refused by {self.host}:{self.port}")
+                return False
+            except Exception as e:
+                self.logger.error(f"Failed to connect to {self.host}:{self.port}: {e}")
+                return False
+
             self.is_connected = True
             self.logger.info(f"Connected to peer {self.host}:{self.port}")
             
             # Send HELLO message
-            hello_msg = Message.create(
-                MessageType.HELLO,
-                self.peer_id,
-                {"version": "1.0"}
-            )
-            await self.send_message(hello_msg)
-            return True
+            try:
+                hello_msg = Message.create(
+                    MessageType.HELLO,
+                    self.peer_id,
+                    {"version": "1.0"}
+                )
+                await self.send_message(hello_msg)
+                return True
+            except Exception as e:
+                self.logger.error(f"Failed to send HELLO message: {e}")
+                await self.disconnect()
+                return False
             
-        except (asyncio.TimeoutError, ConnectionRefusedError) as e:
-            self.logger.error(f"Failed to connect to peer: {e}")
+        except Exception as e:
+            self.logger.error(f"Error in connect: {e}")
+            await self.disconnect()
             return False
 
     async def disconnect(self):

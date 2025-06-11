@@ -281,16 +281,48 @@ class DHT:
                 self.routing_table[peer.id] = peer
         self.logger.debug("Updated routing table")
 
-    def get_connected_peers(self):
-        """Return a list of connected peers (stub for UI compatibility)."""
-        return []
-
     async def connect_to_peer(self, host: str, port: int) -> bool:
         """Connect to a peer using the specified host and port."""
         try:
+            # Validate host and port
+            if not host or not port:
+                self.logger.error("Invalid host or port")
+                return False
+                
+            # Try to parse port as integer
+            try:
+                port = int(port)
+                if port < 1 or port > 65535:
+                    self.logger.error("Port must be between 1 and 65535")
+                    return False
+            except ValueError:
+                self.logger.error("Port must be a valid number")
+                return False
+
+            # Check if we're already connected to this peer
+            for peer in self.peers.values():
+                if peer.host == host and peer.port == port:
+                    self.logger.info(f"Already connected to peer {host}:{port}")
+                    return True
+
+            # Create and connect to peer
             peer = Peer(host, port)
             if await peer.connect():
                 self.peers[peer.peer_id] = peer
+                
+                # Add peer to k-bucket
+                peer_info = PeerInfo(
+                    id=peer.peer_id,
+                    address=host,
+                    port=port,
+                    last_seen=datetime.now(),
+                    is_connected=True
+                )
+                self.add_node(peer_info)
+                
+                # Start listening for messages from this peer
+                asyncio.create_task(peer.start_listening())
+                
                 self.logger.info(f"Connected to peer {host}:{port}")
                 return True
             else:
@@ -298,4 +330,19 @@ class DHT:
                 return False
         except Exception as e:
             self.logger.error(f"Error connecting to peer {host}:{port}: {e}")
-            return False 
+            return False
+
+    def get_connected_peers(self) -> List[PeerInfo]:
+        """Return a list of connected peers."""
+        connected_peers = []
+        for peer in self.peers.values():
+            if peer.is_connected:
+                peer_info = PeerInfo(
+                    id=peer.peer_id,
+                    address=peer.host,
+                    port=peer.port,
+                    last_seen=datetime.now(),
+                    is_connected=True
+                )
+                connected_peers.append(peer_info)
+        return connected_peers 
