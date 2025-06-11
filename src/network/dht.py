@@ -345,4 +345,25 @@ class DHT:
                     is_connected=True
                 )
                 connected_peers.append(peer_info)
-        return connected_peers 
+        return connected_peers
+
+    async def start(self):
+        """Start the DHT network by binding to the specified port."""
+        try:
+            self.server = await asyncio.start_server(
+                self.handle_connection, self.host, self.port
+            )
+            self.logger.info(f"Listening on port: {self.port}")
+            await self.server.serve_forever()
+        except Exception as e:
+            self.logger.error(f"Error starting DHT: {e}")
+
+    async def handle_connection(self, reader, writer):
+        addr = writer.get_extra_info('peername')
+        self.logger.info(f"Accepted connection from {addr}")
+        try:
+            # For now, just close the connection after accepting
+            writer.close()
+            await writer.wait_closed()
+        except Exception as e:
+            self.logger.error(f"Error handling connection from {addr}: {e}") 

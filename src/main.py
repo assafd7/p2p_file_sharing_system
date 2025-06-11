@@ -115,9 +115,9 @@ class P2PFileSharingApp:
         # Initialize database
         await self.db_manager.initialize()
         self.logger.debug("Database initialized")
-        # Start DHT network (no start method implemented)
-        # await self.dht.start()
-        self.logger.debug("DHT network started (no-op)")
+        # Start DHT network
+        await self.dht.start()
+        self.logger.debug("DHT network started")
         # Join network using bootstrap nodes
         if BOOTSTRAP_NODES:
             self.logger.info(f"Joining network using bootstrap nodes: {BOOTSTRAP_NODES}")
