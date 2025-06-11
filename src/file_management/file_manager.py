@@ -295,12 +295,12 @@ class FileManager:
         """Create metadata for a file."""
         try:
             self.logger.debug(f"[DEBUG] Starting metadata creation for file: {file_path}")
-            path = Path(file_path)
+        path = Path(file_path)
 
             # 1. File Stats Stage
             try:
                 self.logger.debug("[DEBUG] Getting file stats")
-                stats = path.stat()
+        stats = path.stat()
                 if stats.st_size == 0:
                     self.logger.error("[ERROR] File is empty")
                     raise FileManagerError("File is empty")
@@ -315,8 +315,8 @@ class FileManager:
             # 2. Timestamp Stage
             try:
                 self.logger.debug("[DEBUG] Processing timestamps")
-                created_at = datetime.fromtimestamp(stats.st_ctime)
-                modified_at = datetime.fromtimestamp(stats.st_mtime)
+        created_at = datetime.fromtimestamp(stats.st_ctime)
+        modified_at = datetime.fromtimestamp(stats.st_mtime)
                 if created_at > datetime.now() or modified_at > datetime.now():
                     self.logger.error("[ERROR] Invalid timestamps")
                     raise FileManagerError("Invalid file timestamps")
@@ -326,17 +326,17 @@ class FileManager:
                 raise FileManagerError(f"Failed to process timestamps: {str(e)}")
             
             # 3. Chunk Creation Stage
-            chunks = []
+        chunks = []
             chunk_index = 0
             file_hash = hashlib.sha256()
             
             try:
                 self.logger.debug("[DEBUG] Starting chunk creation")
                 with open(path, 'rb') as f:
-                    while True:
-                        chunk_data = f.read(self.CHUNK_SIZE)
-                        if not chunk_data:
-                            break
+            while True:
+                chunk_data = f.read(self.CHUNK_SIZE)
+                if not chunk_data:
+                    break
 
                         if len(chunk_data) > self.CHUNK_SIZE:
                             self.logger.error("[ERROR] Chunk size exceeds maximum")
@@ -346,12 +346,12 @@ class FileManager:
                         file_hash.update(chunk_data)
                         
                         chunk = FileChunk(
-                            index=chunk_index,
-                            hash=chunk_hash,
-                            size=len(chunk_data)
+                    index=chunk_index,
+                    hash=chunk_hash,
+                    size=len(chunk_data)
                         )
                         chunks.append(chunk)
-                        chunk_index += 1
+                chunk_index += 1
 
                         self.logger.debug(f"[DEBUG] Created chunk {chunk_index}: size={len(chunk_data)}, hash={chunk_hash}")
             except Exception as e:
@@ -378,15 +378,15 @@ class FileManager:
             try:
                 self.logger.debug("[DEBUG] Creating metadata object")
                 metadata = FileMetadata(
-                    name=path.name,
-                    size=stats.st_size,
-                    created_at=created_at,
-                    modified_at=modified_at,
+            name=path.name,
+            size=stats.st_size,
+            created_at=created_at,
+            modified_at=modified_at,
                     hash=final_hash,
-                    chunks=chunks,
-                    owner_id=owner_id,
-                    permissions={owner_id: ['read', 'write', 'share']}
-                )
+            chunks=chunks,
+            owner_id=owner_id,
+            permissions={owner_id: ['read', 'write', 'share']}
+        )
                 
                 # Verify metadata object
                 if not metadata.name or not metadata.hash or not metadata.chunks:

@@ -271,12 +271,12 @@ class MainWindow(QMainWindow):
         """Handle file sharing."""
         try:
             # Get file path from user
-            file_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "Select File to Share",
-                "",
-                "All Files (*.*)"
-            )
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select File to Share",
+            "",
+            "All Files (*.*)"
+        )
             
             if not file_path:
                 self.logger.debug("File selection cancelled by user")
@@ -353,9 +353,9 @@ class MainWindow(QMainWindow):
         """
         if file_info is None:
             selected_items = [item] if item else self.file_list.selectedItems()
-            if not selected_items:
-                self.show_warning("Please select a file to delete")
-                return
+        if not selected_items:
+            self.show_warning("Please select a file to delete")
+            return
             file_info = selected_items[0].data(0, Qt.ItemDataRole.UserRole)
             if not file_info:
                 self.show_error("Could not get file information")
@@ -480,14 +480,14 @@ class MainWindow(QMainWindow):
         self.file_list.clear()
         
         try:
-            files = self.file_manager.get_shared_files()
+        files = self.file_manager.get_shared_files()
             self.logger.debug(f"Retrieved {len(files)} files from file manager")
             
             if not files:
                 self.logger.debug("No files found in storage")
                 return
             
-            for file_info in files:
+        for file_info in files:
                 self.logger.debug(f"Adding file to list: {file_info.name}")
                 item = QTreeWidgetItem(self.file_list)
                 item.setText(0, file_info.name)
@@ -556,7 +556,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Handle window close event."""
         self.cleanup()
-        event.accept()
+        event.accept() 
 
     def show_error(self, message):
         QMessageBox.critical(self, "Error", str(message))
