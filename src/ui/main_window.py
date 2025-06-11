@@ -271,12 +271,12 @@ class MainWindow(QMainWindow):
         """Handle file sharing."""
         try:
             # Get file path from user
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select File to Share",
-            "",
-            "All Files (*.*)"
-        )
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select File to Share",
+                "",
+                "All Files (*.*)"
+            )
             
             if not file_path:
                 self.logger.debug("File selection cancelled by user")
@@ -313,10 +313,9 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 self.logger.error(f"Error sharing file: {str(e)}")
                 self.show_error(f"Failed to share file: {str(e)}")
-                
         except Exception as e:
             self.logger.error(f"Error in share_file: {str(e)}")
-            self.show_error(f"Error sharing file: {str(e)}")
+            self.show_error(f"Error in share_file: {str(e)}")
 
     def download_file(self):
         """Download a selected file."""
@@ -480,14 +479,14 @@ class MainWindow(QMainWindow):
         self.file_list.clear()
         
         try:
-        files = self.file_manager.get_shared_files()
+            files = self.file_manager.get_shared_files()
             self.logger.debug(f"Retrieved {len(files)} files from file manager")
             
             if not files:
                 self.logger.debug("No files found in storage")
                 return
             
-        for file_info in files:
+            for file_info in files:
                 self.logger.debug(f"Adding file to list: {file_info.name}")
                 item = QTreeWidgetItem(self.file_list)
                 item.setText(0, file_info.name)
@@ -503,7 +502,7 @@ class MainWindow(QMainWindow):
             self.file_list.resizeColumnToContents(2)
             self.file_list.resizeColumnToContents(3)
             self.logger.debug("File list update completed")
-            
+        
         except Exception as e:
             self.logger.error(f"Error updating file list: {e}")
             self.show_error(f"Error updating file list: {e}")
