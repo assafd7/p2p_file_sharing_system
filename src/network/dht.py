@@ -283,4 +283,19 @@ class DHT:
 
     def get_connected_peers(self):
         """Return a list of connected peers (stub for UI compatibility)."""
-        return [] 
+        return []
+
+    async def connect_to_peer(self, host: str, port: int) -> bool:
+        """Connect to a peer using the specified host and port."""
+        try:
+            peer = Peer(host, port)
+            if await peer.connect():
+                self.peers[peer.peer_id] = peer
+                self.logger.info(f"Connected to peer {host}:{port}")
+                return True
+            else:
+                self.logger.error(f"Failed to connect to peer {host}:{port}")
+                return False
+        except Exception as e:
+            self.logger.error(f"Error connecting to peer {host}:{port}: {e}")
+            return False 
