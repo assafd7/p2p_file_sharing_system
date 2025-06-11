@@ -2,13 +2,19 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QStatusBar, QMessageBox,
     QFileDialog, QProgressBar, QMenu, QSystemTrayIcon,
-    QTabWidget, QTreeWidget, QListWidgetItem, QInputDialog
+    QTabWidget, QTreeWidget, QTreeWidgetItem, QListWidgetItem, QInputDialog, QLineEdit
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
 from PyQt6.QtGui import QIcon, QAction
 import logging
 from typing import Dict, List, Optional
 from datetime import datetime
+import os
+from pathlib import Path
+
+from src.file_management.file_manager import FileManager
+from src.network.dht import DHT
+from src.database.db_manager import DatabaseManager
 
 class TransferWorker(QThread):
     progress_updated = pyqtSignal(str, float, str)  # transfer_id, progress, status
@@ -35,21 +41,39 @@ class TransferWorker(QThread):
         self.is_running = False
 
 class MainWindow(QMainWindow):
-    def __init__(self, file_manager, network_manager, db_manager):
+    """Main window of the P2P file sharing application."""
+    
+    def __init__(self, file_manager: FileManager, network_manager: DHT,
+                 db_manager: DatabaseManager, user_id: str, username: str):
         super().__init__()
         self.file_manager = file_manager
         self.network_manager = network_manager
         self.db_manager = db_manager
+        self.user_id = user_id
+        self.username = username
         self.logger = logging.getLogger("MainWindow")
         self.transfer_workers: Dict[str, TransferWorker] = {}
 
-        self.setWindowTitle("P2P File Sharing System")
+        self.setWindowTitle(f"P2P File Sharing - {username}")
         self.setMinimumSize(800, 600)
 
         # Create central widget and main layout
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
+
+        # Create user info bar
+        user_bar = QHBoxLayout()
+        user_label = QLabel(f"Logged in as: {username}")
+        user_label.setStyleSheet("font-weight: bold;")
+        user_bar.addWidget(user_label)
+        user_bar.addStretch()
+        
+        logout_button = QPushButton("Logout")
+        logout_button.clicked.connect(self.handle_logout)
+        user_bar.addWidget(logout_button)
+        
+        main_layout.addLayout(user_bar)
 
         # Create tab widget
         self.tab_widget = QTabWidget()
@@ -79,9 +103,13 @@ class MainWindow(QMainWindow):
 
         # Create file list
         self.file_list = QTreeWidget()
-        self.file_list.setHeaderLabels(["Name", "Size", "Owner", "Last Modified"])
+        self.file_list.setHeaderLabels(["Name", "Size", "Owner", "Status"])
+        self.file_list.setColumnWidth(0, 300)  # Name column
+        self.file_list.setColumnWidth(1, 100)  # Size column
+        self.file_list.setColumnWidth(2, 150)  # Owner column
+        self.file_list.setColumnWidth(3, 100)  # Status column
         self.file_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.file_list.customContextMenuRequested.connect(self.show_file_context_menu)
+        self.file_list.customContextMenuRequested.connect(self.show_context_menu)
         layout.addWidget(self.file_list)
 
         # Create file controls
@@ -95,6 +123,8 @@ class MainWindow(QMainWindow):
         self.download_button.clicked.connect(self.download_file)
         controls_layout.addWidget(self.download_button)
 
+        self.delete_button = QPushButton("Delete")
+        self.delete_button.clicked.connect(self.delete_file)
         layout.addLayout(controls_layout)
         self.tab_widget.addTab(files_tab, "Files")
 
@@ -212,43 +242,81 @@ class MainWindow(QMainWindow):
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
 
-    def show_file_context_menu(self, position):
-        """Show context menu for file list items."""
+    def show_context_menu(self, position):
+        """Show context menu for file list."""
         item = self.file_list.itemAt(position)
         if not item:
             return
 
-        menu = QMenu()
-        
-        download_action = QAction("Download", self)
-        download_action.triggered.connect(lambda: self.download_file(item))
-        menu.addAction(download_action)
-        
-        share_action = QAction("Share", self)
-        share_action.triggered.connect(lambda: self.share_file(item))
-        menu.addAction(share_action)
-        
-        delete_action = QAction("Delete", self)
-        delete_action.triggered.connect(lambda: self.delete_file(item))
-        menu.addAction(delete_action)
+        # Get file info before creating the menu
+        file_info = item.data(0, Qt.ItemDataRole.UserRole)
+        if not file_info:
+            return
 
-        menu.exec(self.file_list.viewport().mapToGlobal(position))
+        # Select the item when right-clicking
+        self.file_list.setCurrentItem(item)
+
+        menu = QMenu()
+        download_action = menu.addAction("Download")
+        delete_action = menu.addAction("Delete")
+
+        action = menu.exec(self.file_list.mapToGlobal(position))
+        if action == download_action:
+            self.download_file()
+        elif action == delete_action:
+            # Pass the file info directly instead of the item
+            self.delete_file(file_info=file_info)
 
     def share_file(self):
-        """Share a file with peers."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select File to Share",
-            "",
-            "All Files (*.*)"
-        )
-        if file_path:
+        """Handle file sharing."""
+        try:
+            # Get file path from user
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select File to Share",
+                "",
+                "All Files (*.*)"
+            )
+            
+            if not file_path:
+                self.logger.debug("File selection cancelled by user")
+                return
+                
+            self.logger.debug(f"Selected file for sharing: {file_path}")
+            
+            # Verify file exists and is readable
+            if not os.path.exists(file_path):
+                self.show_error(f"File does not exist: {file_path}")
+                return
+                
+            if not os.access(file_path, os.R_OK):
+                self.show_error(f"Cannot read file: {file_path}")
+                return
+            
+            # Add file to manager
             try:
-                self.file_manager.add_file(file_path)
+                metadata = self.file_manager.add_file(file_path, self.user_id)
+                if not metadata:
+                    raise Exception("No metadata returned from file manager")
+                    
+                self.logger.debug(f"File shared successfully: {file_path}")
+                self.logger.debug(f"File metadata: {metadata}")
+                
+                # Verify file appears in shared files list
+                shared_files = self.file_manager.get_shared_files()
+                if not any(f.hash == metadata.hash for f in shared_files):
+                    raise Exception("File not found in shared files list after sharing")
+                
                 self.show_info(f"File shared: {file_path}")
                 self.update_file_list()
+                
             except Exception as e:
-                self.show_error(f"Error sharing file: {e}")
+                self.logger.error(f"Error sharing file: {str(e)}")
+                self.show_error(f"Failed to share file: {str(e)}")
+                
+        except Exception as e:
+            self.logger.error(f"Error in share_file: {str(e)}")
+            self.show_error(f"Error sharing file: {str(e)}")
 
     def download_file(self):
         """Download a selected file."""
@@ -257,7 +325,11 @@ class MainWindow(QMainWindow):
             self.show_warning("Please select a file to download")
             return
 
-        file_info = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        file_info = selected_items[0].data(0, Qt.ItemDataRole.UserRole)
+        if not file_info:
+            self.show_error("Could not get file information")
+            return
+
         try:
             save_path, _ = QFileDialog.getSaveFileName(
                 self,
@@ -266,20 +338,29 @@ class MainWindow(QMainWindow):
                 "All Files (*.*)"
             )
             if save_path:
-                self.file_manager.download_file(file_info.id, save_path)
+                self.file_manager.download_file(file_info.hash, save_path)
                 self.show_info(f"Downloading: {file_info.name}")
                 self.update_transfer_list()
         except Exception as e:
             self.show_error(f"Error downloading file: {e}")
 
-    def delete_file(self):
-        """Delete a selected file."""
-        selected_items = self.file_list.selectedItems()
-        if not selected_items:
-            self.show_warning("Please select a file to delete")
-            return
+    def delete_file(self, item=None, file_info=None):
+        """Delete a selected file.
+        
+        Args:
+            item: Optional QTreeWidgetItem to delete. If None, uses the currently selected item.
+            file_info: Optional FileMetadata object. If provided, uses this instead of getting from item.
+        """
+        if file_info is None:
+            selected_items = [item] if item else self.file_list.selectedItems()
+            if not selected_items:
+                self.show_warning("Please select a file to delete")
+                return
+            file_info = selected_items[0].data(0, Qt.ItemDataRole.UserRole)
+            if not file_info:
+                self.show_error("Could not get file information")
+                return
 
-        file_info = selected_items[0].data(Qt.ItemDataRole.UserRole)
         reply = QMessageBox.question(
             self,
             "Confirm Deletion",
@@ -288,7 +369,7 @@ class MainWindow(QMainWindow):
         )
         if reply == QMessageBox.StandardButton.Yes:
             try:
-                self.file_manager.delete_file(file_info.id)
+                self.file_manager.delete_file(file_info.hash, self.user_id)
                 self.show_info(f"File deleted: {file_info.name}")
                 self.update_file_list()
             except Exception as e:
@@ -395,12 +476,45 @@ class MainWindow(QMainWindow):
 
     def update_file_list(self):
         """Update the file list display."""
+        self.logger.debug("Updating file list...")
         self.file_list.clear()
-        files = self.file_manager.get_shared_files()
-        for file_info in files:
-            item = QListWidgetItem(file_info.name)
-            item.setData(Qt.ItemDataRole.UserRole, file_info)
-            self.file_list.addItem(item)
+        
+        try:
+            files = self.file_manager.get_shared_files()
+            self.logger.debug(f"Retrieved {len(files)} files from file manager")
+            
+            if not files:
+                self.logger.debug("No files found in storage")
+                return
+            
+            for file_info in files:
+                self.logger.debug(f"Adding file to list: {file_info.name}")
+                item = QTreeWidgetItem(self.file_list)
+                item.setText(0, file_info.name)
+                item.setText(1, self.format_size(file_info.size))
+                item.setText(2, file_info.owner_id)
+                item.setText(3, file_info.modified_at.strftime("%Y-%m-%d %H:%M:%S"))
+                item.setData(0, Qt.ItemDataRole.UserRole, file_info)
+            
+            # Ensure the file list is visible and columns are properly sized
+            self.file_list.setVisible(True)
+            self.file_list.resizeColumnToContents(0)
+            self.file_list.resizeColumnToContents(1)
+            self.file_list.resizeColumnToContents(2)
+            self.file_list.resizeColumnToContents(3)
+            self.logger.debug("File list update completed")
+            
+        except Exception as e:
+            self.logger.error(f"Error updating file list: {e}")
+            self.show_error(f"Error updating file list: {e}")
+
+    def format_size(self, size_bytes):
+        """Format file size in human-readable format."""
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.1f} {unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.1f} PB"
 
     def update_transfer_list(self):
         """Update the transfer list display."""
@@ -442,4 +556,37 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Handle window close event."""
         self.cleanup()
-        event.accept() 
+        event.accept()
+
+    def show_error(self, message):
+        QMessageBox.critical(self, "Error", str(message))
+
+    def show_info(self, message):
+        QMessageBox.information(self, "Information", str(message))
+
+    def show_warning(self, message):
+        QMessageBox.warning(self, "Warning", str(message))
+
+    def handle_logout(self):
+        """Handle logout button click."""
+        reply = QMessageBox.question(
+            self,
+            "Logout",
+            "Are you sure you want to logout?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.close()
+            # The main application will handle showing the auth window again
+
+    def save_settings(self):
+        """Save application settings."""
+        # Implementation of save_settings method
+        pass
+
+    def save_settings(self):
+        """Save application settings."""
+        # Implementation of save_settings method
+        pass 

@@ -45,11 +45,11 @@ class DatabaseManager:
             await db.execute('''
                 CREATE TABLE IF NOT EXISTS chunks (
                     file_hash TEXT NOT NULL,
-                    index INTEGER NOT NULL,
+                    chunk_index INTEGER NOT NULL,
                     hash TEXT NOT NULL,
                     size INTEGER NOT NULL,
                     status TEXT NOT NULL,
-                    PRIMARY KEY (file_hash, index),
+                    PRIMARY KEY (file_hash, chunk_index),
                     FOREIGN KEY (file_hash) REFERENCES files(hash)
                 )
             ''')
@@ -153,7 +153,7 @@ class DatabaseManager:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute('''
                 INSERT OR REPLACE INTO chunks
-                (file_hash, index, hash, size, status)
+                (file_hash, chunk_index, hash, size, status)
                 VALUES (?, ?, ?, ?, ?)
             ''', (file_hash, chunk_index, chunk_hash, size, status))
             await db.commit()
@@ -164,7 +164,7 @@ class DatabaseManager:
             await db.execute('''
                 UPDATE chunks
                 SET status = ?
-                WHERE file_hash = ? AND index = ?
+                WHERE file_hash = ? AND chunk_index = ?
             ''', (status, file_hash, chunk_index))
             await db.commit()
 

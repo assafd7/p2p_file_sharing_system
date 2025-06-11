@@ -19,6 +19,10 @@ class SecurityManager:
         self._public_key: Optional[rsa.RSAPublicKey] = None
         self._session_keys: Dict[str, bytes] = {}
 
+    def generate_node_id(self) -> str:
+        """Generate a unique node ID."""
+        return hashlib.sha1(os.urandom(20)).hexdigest()
+
     def generate_key_pair(self) -> Tuple[bytes, bytes]:
         """Generate RSA key pair."""
         private_key = rsa.generate_private_key(
@@ -129,8 +133,12 @@ class SecurityManager:
         # Decrypt data
         return decryptor.update(ciphertext) + decryptor.finalize()
 
-    def hash_password(self, password: str, salt: Optional[bytes] = None) -> Tuple[bytes, bytes]:
-        """Hash a password with PBKDF2."""
+    def hash_password(self, password: str, salt: Optional[bytes] = None) -> str:
+        """Hash a password with PBKDF2.
+        
+        Returns:
+            A string containing the base64-encoded key and salt, separated by a colon.
+        """
         if salt is None:
             salt = os.urandom(16)
         
@@ -142,13 +150,36 @@ class SecurityManager:
             dklen=32  # Length of the derived key
         )
         
-        return key, salt
+        # Encode key and salt in base64 and join with a colon
+        key_b64 = base64.b64encode(key).decode('utf-8')
+        salt_b64 = base64.b64encode(salt).decode('utf-8')
+        return f"{key_b64}:{salt_b64}"
 
-    def verify_password(self, password: str, stored_hash: bytes,
-                       stored_salt: bytes) -> bool:
-        """Verify a password against stored hash and salt."""
-        key, _ = self.hash_password(password, stored_salt)
-        return key == stored_hash
+    def verify_password(self, password: str, stored_hash: str) -> bool:
+        """Verify a password against stored hash.
+        
+        Args:
+            password: The password to verify
+            stored_hash: The stored hash string in format "key:salt"
+        """
+        try:
+            key_b64, salt_b64 = stored_hash.split(':')
+            key = base64.b64decode(key_b64)
+            salt = base64.b64decode(salt_b64)
+            
+            # Hash the password with the same salt
+            new_key = hashlib.pbkdf2_hmac(
+                'sha256',
+                password.encode(),
+                salt,
+                100000,
+                dklen=32
+            )
+            
+            return key == new_key
+        except Exception as e:
+            self.logger.error(f"Password verification failed: {e}")
+            return False
 
     def generate_token(self, user_id: str, secret_key: str,
                       expires_delta: timedelta = timedelta(hours=1)) -> str:

@@ -2,7 +2,7 @@ import hashlib
 import time
 import asyncio
 from typing import Dict, List, Set, Optional, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import logging
 from .protocol import Message, MessageType
@@ -11,14 +11,12 @@ from .peer import Peer, PeerInfo
 @dataclass
 class KBucket:
     nodes: List[PeerInfo]
-    last_updated: datetime
+    last_updated: datetime = field(default_factory=datetime.now)
     k: int = 20  # Maximum number of nodes per bucket
 
     def __post_init__(self):
         if not self.nodes:
             self.nodes = []
-        if not self.last_updated:
-            self.last_updated = datetime.now()
 
     def add_node(self, node: PeerInfo) -> bool:
         """Add a node to the bucket if there's space or if it's closer than existing nodes."""
@@ -281,4 +279,8 @@ class DHT:
         for bucket in self.k_buckets:
             for peer in bucket.nodes:
                 self.routing_table[peer.id] = peer
-        self.logger.debug("Updated routing table") 
+        self.logger.debug("Updated routing table")
+
+    def get_connected_peers(self):
+        """Return a list of connected peers (stub for UI compatibility)."""
+        return [] 

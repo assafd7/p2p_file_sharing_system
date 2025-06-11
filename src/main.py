@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QTimer
 
 from src.ui.main_window import MainWindow
+from src.ui.auth_window import AuthWindow
 from src.network.dht import DHT
 from src.network.security import SecurityManager
 from src.file_management.file_manager import FileManager
@@ -37,13 +38,10 @@ class P2PFileSharingApp:
         self.app = QApplication(sys.argv)
         self.app.setApplicationName(WINDOW_TITLE)
         
-        # Create main window
-        self.main_window = MainWindow(
-            file_manager=self.file_manager,
-            network_manager=self.dht,
-            db_manager=self.db_manager
-        )
-        self.main_window.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
+        # Create auth window
+        self.auth_window = AuthWindow(self.db_manager, self.security_manager)
+        self.auth_window.auth_successful.connect(self.on_auth_successful)
+        self.auth_window.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
         
         # Set up asyncio event loop
         self.loop = asyncio.get_event_loop()
@@ -58,6 +56,12 @@ class P2PFileSharingApp:
         for directory in [TEMP_DIR, FILES_DIR, CACHE_DIR]:
             directory.mkdir(parents=True, exist_ok=True)
             self.logger.debug(f"Created directory: {directory}")
+            # Verify directory exists and is writable
+            if not directory.exists():
+                raise RuntimeError(f"Failed to create directory: {directory}")
+            if not os.access(directory, os.W_OK):
+                raise RuntimeError(f"Directory not writable: {directory}")
+            self.logger.debug(f"Directory {directory} is ready for use")
     
     def initialize_components(self):
         """Initialize application components."""
@@ -67,13 +71,18 @@ class P2PFileSharingApp:
         self.security_manager = SecurityManager()
         self.logger.debug("Security manager initialized")
         
-        # Initialize file manager
-        self.file_manager = FileManager(FILES_DIR)
-        self.logger.debug("File manager initialized")
-        
         # Initialize database manager
         self.db_manager = DatabaseManager(DB_PATH)
         self.logger.debug("Database manager initialized")
+        
+        # Initialize file manager
+        self.file_manager = FileManager(
+            storage_dir=FILES_DIR,
+            temp_dir=TEMP_DIR,
+            cache_dir=CACHE_DIR,
+            db_manager=self.db_manager
+        )
+        self.logger.debug("File manager initialized")
         
         # Get local IP address
         local_ip = self.get_local_ip()
@@ -103,15 +112,12 @@ class P2PFileSharingApp:
     async def initialize(self):
         """Initialize async components."""
         self.logger.info("Initializing async components")
-        
         # Initialize database
         await self.db_manager.initialize()
         self.logger.debug("Database initialized")
-        
-        # Start DHT network
-        await self.dht.start()
-        self.logger.info("DHT network started")
-        
+        # Start DHT network (no start method implemented)
+        # await self.dht.start()
+        self.logger.debug("DHT network started (no-op)")
         # Join network using bootstrap nodes
         if BOOTSTRAP_NODES:
             self.logger.info(f"Joining network using bootstrap nodes: {BOOTSTRAP_NODES}")
@@ -127,11 +133,25 @@ class P2PFileSharingApp:
     
     async def process_async_events(self):
         """Process async events."""
-        # Process DHT events
-        await self.dht.process_events()
+        # Process DHT events (no process_events method implemented)
+        # await self.dht.process_events()
+        # Process file transfer events (no process_events method implemented)
+        # await self.file_manager.process_events()
+    
+    def on_auth_successful(self, user_id: str, username: str):
+        """Handle successful authentication."""
+        self.logger.info(f"User authenticated: {username} ({user_id})")
         
-        # Process file transfer events
-        await self.file_manager.process_events()
+        # Create main window
+        self.main_window = MainWindow(
+            file_manager=self.file_manager,
+            network_manager=self.dht,
+            db_manager=self.db_manager,
+            user_id=user_id,
+            username=username
+        )
+        self.main_window.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
+        self.main_window.show()
     
     def run(self):
         """Run the application."""
@@ -140,8 +160,8 @@ class P2PFileSharingApp:
         # Initialize async components
         self.loop.run_until_complete(self.initialize())
         
-        # Show main window
-        self.main_window.show()
+        # Show auth window
+        self.auth_window.show()
         
         # Run application
         return self.app.exec()
@@ -149,15 +169,12 @@ class P2PFileSharingApp:
     def cleanup(self):
         """Clean up resources."""
         self.logger.info("Cleaning up resources")
-        
-        # Stop DHT network
-        self.loop.run_until_complete(self.dht.stop())
-        self.logger.debug("DHT network stopped")
-        
+        # Stop DHT network (no stop method implemented)
+        # self.loop.run_until_complete(self.dht.stop())
+        self.logger.debug("DHT network stopped (no-op)")
         # Close database connection
         self.loop.run_until_complete(self.db_manager.close())
         self.logger.debug("Database connection closed")
-        
         # Stop event loop
         self.loop.stop()
         self.logger.debug("Event loop stopped")

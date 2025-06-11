@@ -1,10 +1,27 @@
 import os
 from pathlib import Path
 
-# Network Configuration
+# Network settings
+DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
-DEFAULT_HOST = "0.0.0.0"  # Listen on all interfaces
-BOOTSTRAP_NODES = []  # Bootstrap nodes will be configured at runtime
+BOOTSTRAP_NODES = []
+
+# Directory settings
+BASE_DIR = Path(__file__).parent.parent.parent
+TEMP_DIR = BASE_DIR / "data" / "temp"
+FILES_DIR = BASE_DIR / "data" / "files"
+CACHE_DIR = BASE_DIR / "data" / "cache"
+DB_PATH = BASE_DIR / "data" / "p2p.db"
+
+# UI settings
+WINDOW_TITLE = "P2P File Sharing System"
+WINDOW_MIN_WIDTH = 800
+WINDOW_MIN_HEIGHT = 600
+
+# Security settings
+KEY_SIZE = 2048
+TOKEN_EXPIRY_HOURS = 24
+CHUNK_SIZE = 1024 * 1024  # 1MB
 
 # DHT Configuration
 K_BUCKET_SIZE = 20
@@ -12,14 +29,10 @@ ALPHA = 3  # Number of parallel requests
 NODE_ID_BITS = 160
 
 # File Management
-CHUNK_SIZE = 1024 * 1024  # 1MB
 MAX_FILE_SIZE = 1024 * 1024 * 1024  # 1GB
 TEMP_DIR = Path("data/temp")
 FILES_DIR = Path("data/files")
 CACHE_DIR = Path("data/cache")
-
-# Database
-DB_PATH = Path("data/p2p.db")
 
 # Logging
 LOG_DIR = Path("logs")
@@ -34,9 +47,6 @@ RSA_KEY_SIZE = 2048
 HASH_ALGORITHM = "sha256"
 
 # UI
-WINDOW_TITLE = "P2P File Sharing System"
-WINDOW_MIN_WIDTH = 800
-WINDOW_MIN_HEIGHT = 600
 UPDATE_INTERVAL = 1000  # ms
 
 # Create necessary directories
