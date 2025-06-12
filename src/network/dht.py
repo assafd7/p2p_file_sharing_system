@@ -50,17 +50,26 @@ class KBucket:
 class DHT:
     """Distributed Hash Table for peer discovery and routing."""
     
-    def __init__(self, host: str, port: int, username: str, bootstrap_nodes: List[Tuple[str, int]] = None):
+    def __init__(self, host: str, port: int, bootstrap_nodes: List[Tuple[str, int]] = None, username: str = "Anonymous"):
+        """Initialize the DHT network."""
         self.host = host
         self.port = port
-        self.username = username
         self.bootstrap_nodes = bootstrap_nodes or []
+        self.username = username
         self.peers: Dict[str, Peer] = {}
         self.logger = logging.getLogger(__name__)
         self._server = None
         self._running = False
         self._lock = asyncio.Lock()
         self._cleanup_task = None
+        
+        # Initialize message handlers
+        self.message_handlers = {
+            MessageType.PEER_LIST: self._handle_peer_list,
+            MessageType.HEARTBEAT: self._handle_heartbeat,
+            MessageType.GOODBYE: self._handle_goodbye,
+            MessageType.USER_INFO: self._handle_user_info
+        }
         
     @property
     def node_id(self) -> str:
@@ -166,33 +175,56 @@ class DHT:
             local_peer.register_message_handler(MessageType.HEARTBEAT, self._handle_heartbeat)
             local_peer.register_message_handler(MessageType.GOODBYE, self._handle_goodbye)
             
-    async def _handle_heartbeat(self, message: Message, peer: Peer):
-        """Handle heartbeat messages from peers."""
+    async def _handle_peer_list(self, message: Message, peer: Peer):
+        """Handle peer list message."""
         try:
-            # Update peer's last seen timestamp
-            peer.last_seen = time.time()
-            self.logger.debug(f"Received heartbeat from {peer.peer_id}")
-            
-            # Send acknowledgment if needed
-            await peer.send_message(Message(
-                type=MessageType.HEARTBEAT,
-                sender_id=self.node_id,
-                payload={'status': 'ok'}
-            ))
-            
+            peers = message.payload.get('peers', [])
+            for peer_info in peers:
+                if peer_info['id'] not in self.peers:
+                    await self.connect_to_peer(peer_info['host'], peer_info['port'])
+        except Exception as e:
+            self.logger.error(f"Error handling peer list: {e}")
+
+    async def _handle_heartbeat(self, message: Message, peer: Peer):
+        """Handle heartbeat message."""
+        try:
+            peer.update_last_seen()
+            # Send acknowledgment
+            await self.send_message(
+                Message(
+                    type=MessageType.HEARTBEAT,
+                    sender_id=self.node_id,
+                    payload={'timestamp': time.time()}
+                ),
+                peer
+            )
         except Exception as e:
             self.logger.error(f"Error handling heartbeat: {e}")
-            
+
     async def _handle_goodbye(self, message: Message, peer: Peer):
-        """Handle goodbye messages from peers."""
+        """Handle goodbye message."""
         try:
-            reason = message.payload.get('reason', 'unknown')
-            self.logger.info(f"Peer {peer.peer_id} is disconnecting. Reason: {reason}")
-            await self.remove_peer(peer.peer_id)
-            
+            self.logger.info(f"Received goodbye from peer {peer.id}")
+            await self._handle_peer_disconnect(peer)
         except Exception as e:
-            self.logger.error(f"Error handling goodbye message: {e}")
-            
+            self.logger.error(f"Error handling goodbye: {e}")
+
+    async def _handle_user_info(self, message: Message, peer: Peer):
+        """Handle user info message."""
+        try:
+            username = message.payload.get('username')
+            if username:
+                self.logger.info(f"Received username from peer {peer.id}: {username}")
+                # Update peer's username in database
+                await self.db_manager.update_peer_username(peer.id, username)
+                # Update peer object
+                peer.username = username
+                # Notify UI
+                if hasattr(self, 'on_peer_updated'):
+                    self.on_peer_updated(peer)
+        except Exception as e:
+            self.logger.error(f"Error handling user info: {e}")
+
     def get_local_peer(self) -> Optional[Peer]:
         """Get the local peer instance."""
         return self.peers.get(self.node_id)
@@ -308,22 +340,6 @@ class DHT:
         except Exception as e:
             self.logger.error(f"Error connecting to peer: {e}")
             return None
-
-    async def _handle_user_info(self, message: Message, peer: Peer):
-        """Handle user info message from peer."""
-        try:
-            username = message.payload.get('username')
-            if username:
-                self.logger.info(f"Received username from peer {peer.id}: {username}")
-                # Update peer's username in database
-                await self.db_manager.update_peer_username(peer.id, username)
-                # Update peer object
-                peer.username = username
-                # Notify UI
-                if hasattr(self, 'on_peer_updated'):
-                    self.on_peer_updated(peer)
-        except Exception as e:
-            self.logger.error(f"Error handling user info: {e}")
 
     def _get_bucket_index(self, node_id: str) -> int:
         """Get the index of the k-bucket for a given node ID."""
