@@ -48,19 +48,121 @@ class KBucket:
         return False
 
 class DHT:
-    def __init__(self, node_id: str, host: str, port: int):
-        self.node_id = node_id
+    """Distributed Hash Table for peer discovery and routing."""
+    
+    def __init__(self, host: str, port: int, bootstrap_nodes: List[Tuple[str, int]] = None):
         self.host = host
         self.port = port
-        self.k_buckets: List[KBucket] = [KBucket([]) for _ in range(160)]  # 160-bit key space
-        self.logger = logging.getLogger("DHT")
-        self.alpha = 3  # Number of parallel requests
+        self.bootstrap_nodes = bootstrap_nodes or []
         self.peers: Dict[str, Peer] = {}
+        self.logger = logging.getLogger(__name__)
+        self._server = None
+        self._local_peer = None
+        self._running = False
+        
+    async def start(self):
+        """Start the DHT network."""
+        try:
+            self.logger.info("Starting DHT network")
+            
+            # Create and start local peer
+            self._local_peer = Peer(
+                host=self.host,
+                port=self.port,
+                is_local=True
+            )
+            
+            # Register message handlers
+            self._local_peer.register_message_handler(MessageType.PEER_LIST, self.handle_peer_list)
+            self._local_peer.register_message_handler(MessageType.HEARTBEAT, self.handle_heartbeat)
+            
+            # Start listening
+            await self._local_peer.start_listening()
+            self.logger.info(f"Local peer started listening on {self.host}:{self.port}")
+            
+            # Connect to bootstrap nodes if available
+            if self.bootstrap_nodes:
+                for node_host, node_port in self.bootstrap_nodes:
+                    try:
+                        await self.connect_to_peer(node_host, node_port)
+                    except Exception as e:
+                        self.logger.warning(f"Failed to connect to bootstrap node {node_host}:{node_port}: {e}")
+            else:
+                self.logger.info("No bootstrap nodes configured, starting as first node")
+            
+            self._running = True
+            self.logger.info("DHT network started successfully")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to start DHT network: {e}")
+            raise
+            
+    async def handle_peer_list(self, message: Message, peer: Peer):
+        """Handle incoming peer list message."""
+        try:
+            peers = message.payload.get('peers', [])
+            self.logger.debug(f"Received peer list with {len(peers)} peers from {peer.peer_id}")
+            
+            # Process each peer in the list
+            for peer_info in peers:
+                try:
+                    # Skip if it's our own peer info
+                    if peer_info['id'] == self._local_peer.peer_id:
+                        continue
+                        
+                    # Skip if we already know this peer
+                    if peer_info['id'] in self.peers:
+                        continue
+                        
+                    # Connect to the new peer
+                    await self.connect_to_peer(peer_info['address'], peer_info['port'])
+                    
+                except Exception as e:
+                    self.logger.warning(f"Failed to process peer {peer_info.get('id')}: {e}")
+                    
+        except Exception as e:
+            self.logger.error(f"Error handling peer list: {e}")
+            
+    async def handle_heartbeat(self, message: Message, peer: Peer):
+        """Handle incoming heartbeat message."""
+        try:
+            # Update peer's last seen timestamp
+            peer.last_seen = time.time()
+            self.logger.debug(f"Received heartbeat from {peer.peer_id}")
+            
+        except Exception as e:
+            self.logger.error(f"Error handling heartbeat: {e}")
+            
+    async def connect_to_peer(self, host: str, port: int) -> Optional[Peer]:
+        """Connect to a peer and add it to the network."""
+        try:
+            # Create new peer
+            peer = Peer(host=host, port=port)
+            
+            # Register message handlers
+            peer.register_message_handler(MessageType.PEER_LIST, self.handle_peer_list)
+            peer.register_message_handler(MessageType.HEARTBEAT, self.handle_heartbeat)
+            
+            # Connect to peer
+            await peer.connect()
+            
+            # Add to peers list
+            self.peers[peer.peer_id] = peer
+            self.logger.info(f"Connected to peer {peer.peer_id} at {host}:{port}")
+            
+            # Send our peer list
+            await self.send_peer_list_to_peer(peer)
+            
+            return peer
+            
+        except Exception as e:
+            self.logger.error(f"Error connecting to peer {host}:{port}: {e}")
+            return None
 
     def _get_bucket_index(self, node_id: str) -> int:
         """Get the index of the k-bucket for a given node ID."""
         # XOR the node IDs and find the first differing bit
-        xor = int(self.node_id, 16) ^ int(node_id, 16)
+        xor = int(self._local_peer.peer_id, 16) ^ int(node_id, 16)
         if xor == 0:
             return 0
         return 159 - (xor.bit_length() - 1)
@@ -132,7 +234,7 @@ class DHT:
                 try:
                     store_msg = Message.create(
                         MessageType.STORE,
-                        self.node_id,
+                        self._local_peer.peer_id,
                         {"key": key, "value": value}
                     )
                     await peer.send_message(store_msg)
@@ -154,7 +256,7 @@ class DHT:
                 try:
                     find_msg = Message.create(
                         MessageType.FIND_VALUE,
-                        self.node_id,
+                        self._local_peer.peer_id,
                         {"key": key}
                     )
                     await peer.send_message(find_msg)
@@ -174,8 +276,8 @@ class DHT:
                     # Send FIND_NODE request to bootstrap node
                     find_msg = Message.create(
                         MessageType.FIND_NODE,
-                        self.node_id,
-                        {"target": self.node_id}
+                        self._local_peer.peer_id,
+                        {"target": self._local_peer.peer_id}
                     )
                     await peer.send_message(find_msg)
             except Exception as e:
@@ -310,7 +412,7 @@ class DHT:
             chunk = peer_list[i:i + chunk_size]
             message = Message(
                 type=MessageType.PEER_LIST,
-                sender_id=self.local_peer.peer_id,
+                sender_id=self._local_peer.peer_id,
                 payload={
                     'peers': chunk,
                     'chunk_index': i // chunk_size,
@@ -358,7 +460,7 @@ class DHT:
                         continue
                         
                     # Skip if it's our own peer info
-                    if peer_id == self.local_peer.peer_id:
+                    if peer_id == self._local_peer.peer_id:
                         continue
                         
                     # Skip if we already know this peer
@@ -421,8 +523,8 @@ class DHT:
             self.routing_table = {}
 
             # Create local peer and start listening on all interfaces
-            self.local_peer = Peer("0.0.0.0", self.port, self.node_id, is_local=True)
-            asyncio.create_task(self.local_peer.start_listening())
+            self._local_peer = Peer("0.0.0.0", self.port, self._local_peer.peer_id, is_local=True)
+            asyncio.create_task(self._local_peer.start_listening())
             self.logger.info(f"Local peer started listening on 0.0.0.0:{self.port}")
 
             # Start periodic cleanup
