@@ -20,21 +20,16 @@ class MessageType(Enum):
 
 @dataclass
 class Message:
-    type: MessageType
-    sender_id: str
-    payload: Dict[str, Any]
-    timestamp: float = time.time()
-    _logger: logging.Logger = None
-
-    def __post_init__(self):
-        self._logger = logging.getLogger(__name__)
-
-    @classmethod
-    def create(cls, msg_type: MessageType, sender_id: str, payload: Dict[str, Any]) -> 'Message':
-        return cls(type=msg_type, sender_id=sender_id, payload=payload)
-
+    """Message class for network communication."""
+    
+    def __init__(self, msg_type: MessageType, sender_id: str, payload: Dict[str, Any], timestamp: Optional[float] = None):
+        self.type = msg_type
+        self.sender_id = sender_id
+        self.payload = payload
+        self.timestamp = timestamp or time.time()
+        
     def serialize(self) -> bytes:
-        """Serialize the message to bytes with length prefix."""
+        """Serialize the message to bytes."""
         try:
             # Create message dictionary
             msg_dict = {
@@ -44,98 +39,44 @@ class Message:
                 'timestamp': self.timestamp
             }
             
-            # Log message content before serialization
-            self._logger.debug(f"Serializing message: {msg_dict}")
-            
-            # Serialize to JSON
+            # Convert to JSON
             json_data = json.dumps(msg_dict).encode('utf-8')
-            
-            # Log actual data size
-            self._logger.debug(f"JSON data size: {len(json_data)} bytes")
-            
-            # Validate size before adding length prefix
-            if len(json_data) > MAX_MESSAGE_SIZE:
-                self._logger.error(f"Message size {len(json_data)} exceeds limit of {MAX_MESSAGE_SIZE}")
-                raise MessageSizeError(f"Message size {len(json_data)} exceeds limit of {MAX_MESSAGE_SIZE}")
+            self.logger.debug(f"JSON data size: {len(json_data)} bytes")
             
             # Pack length prefix
             length_prefix = struct.pack('!I', len(json_data))
-            
-            # Log final message size
-            final_size = len(length_prefix) + len(json_data)
-            self._logger.debug(f"Final message size with prefix: {final_size} bytes")
-            
-            # Verify the packed length matches actual data length
-            unpacked_length = struct.unpack('!I', length_prefix)[0]
-            if unpacked_length != len(json_data):
-                self._logger.error(f"Length mismatch: packed={unpacked_length}, actual={len(json_data)}")
-                raise InvalidMessageError("Length prefix does not match actual data length")
+            self.logger.debug(f"Final message size with prefix: {len(length_prefix) + len(json_data)} bytes")
             
             return length_prefix + json_data
             
         except Exception as e:
-            self._logger.error(f"Error serializing message: {e}")
+            self.logger.error(f"Error serializing message: {e}")
             raise
-
+            
     @classmethod
     def deserialize(cls, data: bytes) -> 'Message':
-        """Deserialize a message from bytes."""
-        logger = logging.getLogger(__name__)
+        """Deserialize bytes to a Message object."""
         try:
-            # Log raw data size
-            logger.debug(f"Deserializing data of size: {len(data)} bytes")
+            # The length prefix has already been handled by the reader
+            # Just decode the JSON data
+            json_data = data.decode('utf-8')
+            msg_dict = json.loads(json_data)
             
-            if len(data) < 4:
-                logger.error("Data too short to contain length prefix")
-                raise InvalidMessageError("Data too short to contain length prefix")
-            
-            # Unpack length prefix
-            length = struct.unpack('!I', data[:4])[0]
-            logger.debug(f"Unpacked length prefix: {length} bytes")
-            
-            # Validate length
-            if length <= 0:
-                logger.error(f"Invalid message length: {length}")
-                raise InvalidMessageError(f"Invalid message length: {length}")
-            
-            if length > MAX_MESSAGE_SIZE:
-                logger.error(f"Message size {length} exceeds limit of {MAX_MESSAGE_SIZE}")
-                raise MessageSizeError(f"Message size {length} exceeds limit of {MAX_MESSAGE_SIZE}")
-            
-            if len(data) < 4 + length:
-                logger.error(f"Incomplete message: expected {4 + length} bytes, got {len(data)}")
-                raise InvalidMessageError("Incomplete message")
-            
-            # Extract and decode JSON data
-            json_data = data[4:4 + length]
-            logger.debug(f"Extracted JSON data size: {len(json_data)} bytes")
-            
-            try:
-                msg_dict = json.loads(json_data.decode('utf-8'))
-            except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON data: {e}")
-                raise InvalidMessageError(f"Invalid JSON data: {e}")
-            
-            # Log deserialized message
-            logger.debug(f"Deserialized message: {msg_dict}")
-            
-            # Validate required fields
-            if 'type' not in msg_dict or 'sender_id' not in msg_dict:
-                logger.error("Missing required fields in message")
-                raise InvalidMessageError("Missing required fields in message")
-            
-            # Create message object
             return cls(
-                type=MessageType(msg_dict['type']),
+                msg_type=MessageType(msg_dict['type']),
                 sender_id=msg_dict['sender_id'],
-                payload=msg_dict.get('payload', {})
+                payload=msg_dict['payload'],
+                timestamp=msg_dict['timestamp']
             )
             
-        except struct.error as e:
-            logger.error(f"Error unpacking length prefix: {e}")
-            raise InvalidMessageError(f"Error unpacking length prefix: {e}")
+        except json.JSONDecodeError as e:
+            cls.logger.error(f"Error decoding JSON: {e}")
+            raise InvalidMessageError(f"Invalid JSON data: {e}")
+        except KeyError as e:
+            cls.logger.error(f"Missing required field: {e}")
+            raise InvalidMessageError(f"Missing required field: {e}")
         except Exception as e:
-            logger.error(f"Error deserializing message: {e}")
+            cls.logger.error(f"Error deserializing message: {e}")
             raise
 
 class ProtocolError(Exception):
