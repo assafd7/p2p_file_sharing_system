@@ -5,7 +5,7 @@ from typing import Dict, List, Set, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
-from protocol import Message, MessageType
+from .protocol import Message, MessageType
 from peer import Peer, PeerInfo
 
 @dataclass
