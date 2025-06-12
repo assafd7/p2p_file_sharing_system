@@ -33,7 +33,7 @@ class DatabaseManager:
                 # Create peers table
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS peers (
-                        peer_id TEXT PRIMARY KEY,
+                        id TEXT PRIMARY KEY,
                         host TEXT NOT NULL,
                         port INTEGER NOT NULL,
                         username TEXT,
@@ -194,13 +194,13 @@ class DatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT * FROM peers WHERE peer_id = ?",
+                    "SELECT * FROM peers WHERE id = ?",
                     (peer_id,)
                 )
                 row = cursor.fetchone()
                 if row:
                     return {
-                        'peer_id': row[0],
+                        'id': row[0],
                         'host': row[1],
                         'port': row[2],
                         'username': row[3],
@@ -223,13 +223,23 @@ class DatabaseManager:
 
     async def update_peer_username(self, peer_id: str, username: str):
         """Update peer's username."""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute('''
-                UPDATE peers
-                SET username = ?
-                WHERE id = ?
-            ''', (username, peer_id))
-            await db.commit()
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO peers (id, host, port, username, last_seen)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(id) DO UPDATE SET
+                        username = excluded.username,
+                        last_seen = CURRENT_TIMESTAMP
+                    """,
+                    (peer_id, peer_id.split(':')[0], int(peer_id.split(':')[1]), username)
+                )
+                conn.commit()
+                self.logger.info(f"Updated username for peer {peer_id}: {username}")
+        except Exception as e:
+            self.logger.error(f"Error updating peer username: {e}")
 
     async def add_file(self, file_hash: str, name: str, size: int, owner_id: str,
                       permissions: Dict[str, List[str]], metadata: Optional[Dict] = None):
