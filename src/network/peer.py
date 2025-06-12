@@ -166,11 +166,29 @@ class Peer:
             
         try:
             data = message.serialize()
-            self.writer.write(data)
+            total_sent = 0
+            while total_sent < len(data):
+                try:
+                    sent = await asyncio.wait_for(
+                        self.writer.write(data[total_sent:]),
+                        timeout=READ_TIMEOUT
+                    )
+                    if sent == 0:
+                        self.logger.error("Connection closed while sending message")
+                        await self.disconnect()
+                        return False
+                    total_sent += sent
+                    self.logger.debug(f"Sent {total_sent}/{len(data)} bytes")
+                except asyncio.TimeoutError:
+                    self.logger.error("Timeout sending message")
+                    await self.disconnect()
+                    return False
+                    
             await self.writer.drain()
             return True
         except Exception as e:
             self.logger.error(f"Error sending message: {e}")
+            await self.disconnect()
             return False
 
     async def receive_message(self) -> Optional[Message]:
@@ -194,8 +212,16 @@ class Peer:
                 await self.disconnect()
                 return None
                 
+            # Verify length prefix bytes
+            if len(length_data) != 4:
+                self.logger.error(f"Invalid length prefix size: {len(length_data)} bytes")
+                await self.disconnect()
+                return None
+                
+            # Convert to integer and validate
             try:
                 length = int.from_bytes(length_data, byteorder='big')
+                self.logger.debug(f"Received message length: {length} bytes")
             except ValueError as e:
                 self.logger.error(f"Invalid message length data: {e}")
                 await self.disconnect()
@@ -211,23 +237,35 @@ class Peer:
                 await self.disconnect()
                 return None
                 
-            # Read message data
+            # Read message data with progress tracking
             try:
-                data = await asyncio.wait_for(
-                    self.reader.readexactly(length),
-                    timeout=READ_TIMEOUT
-                )
+                data = bytearray()
+                remaining = length
+                while remaining > 0:
+                    chunk = await asyncio.wait_for(
+                        self.reader.read(min(remaining, CHUNK_SIZE)),
+                        timeout=READ_TIMEOUT
+                    )
+                    if not chunk:
+                        self.logger.error("Connection closed while reading message data")
+                        await self.disconnect()
+                        return None
+                    data.extend(chunk)
+                    remaining -= len(chunk)
+                    self.logger.debug(f"Read {len(data)}/{length} bytes")
             except asyncio.TimeoutError:
                 self.logger.error("Timeout reading message data")
                 await self.disconnect()
                 return None
-            except asyncio.IncompleteReadError:
-                self.logger.error("Connection closed while reading message data")
+                
+            # Verify we got exactly the expected amount of data
+            if len(data) != length:
+                self.logger.error(f"Message size mismatch: expected {length}, got {len(data)}")
                 await self.disconnect()
                 return None
                 
             try:
-                return Message.deserialize(data)
+                return Message.deserialize(bytes(data))
             except MessageSizeError as e:
                 self.logger.error(f"Message size error: {e}")
                 await self.disconnect()
