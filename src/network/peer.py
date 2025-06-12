@@ -27,13 +27,14 @@ class PeerInfo:
     is_connected: bool = False
 
 class Peer:
-    def __init__(self, host: str, port: int, peer_id: Optional[str] = None):
+    def __init__(self, host: str, port: int, peer_id: Optional[str] = None, is_local: bool = False):
         self.host = host
         self.port = port
         self.peer_id = peer_id or self._generate_peer_id()
         self.reader: Optional[asyncio.StreamReader] = None
         self.writer: Optional[asyncio.StreamWriter] = None
         self.is_connected = False
+        self.is_local = is_local
         self.message_handlers: Dict[MessageType, Callable[[Message], Awaitable[None]]] = {}
         self.logger = logging.getLogger(f"Peer-{self.peer_id[:8]}")
 
@@ -199,6 +200,10 @@ class Peer:
 
     async def start_listening(self):
         """Start listening for incoming connections."""
+        if not self.is_local:
+            self.logger.debug("Not starting server for non-local peer")
+            return
+
         try:
             # Create server socket
             server = await asyncio.start_server(
