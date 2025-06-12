@@ -198,45 +198,40 @@ class DHT:
         return self.peers.get(self.node_id)
         
     async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        """Handle new incoming connections."""
+        """Handle new peer connection."""
         try:
             # Get peer address
             peer_addr = writer.get_extra_info('peername')
-            self.logger.info(f"New connection from {peer_addr[0]}:{peer_addr[1]}")
+            peer_id = f"{peer_addr[0]}:{peer_addr[1]}"
             
-            # Create new peer instance
-            peer = Peer(
-                peer_id=f"{peer_addr[0]}:{peer_addr[1]}",
-                host=peer_addr[0],
-                port=peer_addr[1],
-                reader=reader,
-                writer=writer
-            )
+            self.logger.info(f"New connection from {peer_id}")
             
-            # Register message handlers for this peer
-            peer.register_message_handler(MessageType.PEER_LIST, self.handle_peer_list)
-            peer.register_message_handler(MessageType.HEARTBEAT, self._handle_heartbeat)
-            peer.register_message_handler(MessageType.GOODBYE, self._handle_goodbye)
-            
-            # Add to peers list
-            self.peers[peer.peer_id] = peer
+            # Create peer object
+            peer = Peer(reader, writer, peer_id)
+            self.peers[peer_id] = peer
             
             # Start message processing
-            await peer.start()
+            asyncio.create_task(self._process_messages(peer))
             
-            # Send our username to the peer
-            await peer.send_message(Message(
-                type=MessageType.USER_INFO,
-                sender_id=self.node_id,
-                payload={'username': self.username}
-            ))
+            # Send our username
+            await self.send_message(
+                Message(
+                    type=MessageType.USER_INFO,
+                    sender_id=self.node_id,
+                    payload={'username': self.username}
+                ),
+                peer
+            )
             
+            # Notify UI
+            if hasattr(self, 'on_peer_connected'):
+                self.on_peer_connected(peer)
+                
         except Exception as e:
             self.logger.error(f"Error handling connection: {e}")
-            if writer:
-                writer.close()
-                await writer.wait_closed()
-                
+            writer.close()
+            await writer.wait_closed()
+
     async def handle_peer_list(self, message: Message, peer: Peer):
         """Handle peer list messages."""
         try:
@@ -266,59 +261,56 @@ class DHT:
             
     async def connect_to_peer(self, host: str, port: int) -> Optional[Peer]:
         """Connect to a peer."""
-        peer_id = f"{host}:{port}"
-        
-        # Skip if already connected
-        if peer_id in self.peers:
-            return self.peers[peer_id]
-            
         try:
-            # Attempt connection
+            # Create connection
             reader, writer = await asyncio.open_connection(host, port)
             
-            # Create peer instance
-            peer = Peer(
-                peer_id=peer_id,
-                host=host,
-                port=port,
-                reader=reader,
-                writer=writer
-            )
+            # Get peer address
+            peer_addr = writer.get_extra_info('peername')
+            peer_id = f"{peer_addr[0]}:{peer_addr[1]}"
             
-            # Register message handlers
-            peer.register_message_handler(MessageType.PEER_LIST, self.handle_peer_list)
-            peer.register_message_handler(MessageType.HEARTBEAT, self._handle_heartbeat)
-            peer.register_message_handler(MessageType.GOODBYE, self._handle_goodbye)
-            peer.register_message_handler(MessageType.USER_INFO, self._handle_user_info)
+            self.logger.info(f"Connected to peer {peer_id}")
             
-            # Add to peers list
+            # Create peer object
+            peer = Peer(reader, writer, peer_id)
             self.peers[peer_id] = peer
             
             # Start message processing
-            await peer.start()
+            asyncio.create_task(self._process_messages(peer))
             
-            # Send our username to the peer
-            await peer.send_message(Message(
-                type=MessageType.USER_INFO,
-                sender_id=self.node_id,
-                payload={'username': self.username}
-            ))
+            # Send our username
+            await self.send_message(
+                Message(
+                    type=MessageType.USER_INFO,
+                    sender_id=self.node_id,
+                    payload={'username': self.username}
+                ),
+                peer
+            )
             
-            self.logger.info(f"Connected to peer {peer_id}")
+            # Notify UI
+            if hasattr(self, 'on_peer_connected'):
+                self.on_peer_connected(peer)
+                
             return peer
             
         except Exception as e:
-            self.logger.error(f"Error connecting to peer {peer_id}: {e}")
+            self.logger.error(f"Error connecting to peer: {e}")
             return None
 
     async def _handle_user_info(self, message: Message, peer: Peer):
-        """Handle user info messages from peers."""
+        """Handle user info message from peer."""
         try:
             username = message.payload.get('username')
             if username:
+                self.logger.info(f"Received username from peer {peer.id}: {username}")
                 # Update peer's username in database
-                await self.db_manager.update_peer_username(peer.peer_id, username)
-                self.logger.info(f"Updated username for peer {peer.peer_id}: {username}")
+                await self.db_manager.update_peer_username(peer.id, username)
+                # Update peer object
+                peer.username = username
+                # Notify UI
+                if hasattr(self, 'on_peer_updated'):
+                    self.on_peer_updated(peer)
         except Exception as e:
             self.logger.error(f"Error handling user info: {e}")
 

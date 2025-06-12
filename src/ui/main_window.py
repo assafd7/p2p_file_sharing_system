@@ -498,16 +498,23 @@ class MainWindow(QMainWindow):
         )
 
     def update_ui(self):
-        """Update UI elements with current data."""
-        # Update file list
-        loop = asyncio.get_event_loop()
-        loop.create_task(self.update_file_list())
-        
-        # Update transfer list
-        self.update_transfer_list()
-        
-        # Update peer list
-        loop.create_task(self.update_peer_list())
+        """Update the UI with current state."""
+        try:
+            # Update file list
+            self.update_file_list()
+            
+            # Update transfer list
+            self.update_transfer_list()
+            
+            # Update peer list using asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self.update_peer_list())
+            else:
+                asyncio.run(self.update_peer_list())
+                
+        except Exception as e:
+            self.logger.error(f"Error updating UI: {e}")
 
     async def update_file_list(self):
         """Update the file list display."""
@@ -553,25 +560,57 @@ class MainWindow(QMainWindow):
             self.transfer_list.addItem(item)
 
     async def update_peer_list(self):
-        """Update the peer list in the UI."""
+        """Update the peer list with current peers."""
         try:
             self.peer_list.clear()
             peers = self.network_manager.get_connected_peers()
+            
             for peer in peers:
-                # Get username from database
+                # Get peer info from database
                 peer_info = await self.db_manager.get_peer(peer.id)
                 username = peer_info.get('username', 'Unknown') if peer_info else 'Unknown'
                 
+                # Create peer list item
                 item = QTreeWidgetItem([
-                    username,  # Username instead of ID
+                    username,
                     peer.address,
                     str(peer.port),
-                    "Connected" if peer.is_connected else "Disconnected"
+                    "Connected"
                 ])
-                item.setData(0, Qt.ItemDataRole.UserRole, peer)  # Store peer object for context menu
                 self.peer_list.addTopLevelItem(item)
+                
+            # Resize columns to content
+            for i in range(self.peer_list.columnCount()):
+                self.peer_list.resizeColumnToContents(i)
+                
         except Exception as e:
             self.logger.error(f"Error updating peer list: {e}")
+
+    def on_peer_connected(self, peer):
+        """Handle peer connection event."""
+        try:
+            self.logger.info(f"Peer connected: {peer.id}")
+            # Update peer list using asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self.update_peer_list())
+            else:
+                asyncio.run(self.update_peer_list())
+        except Exception as e:
+            self.logger.error(f"Error handling peer connection: {e}")
+
+    def on_peer_disconnected(self, peer):
+        """Handle peer disconnection event."""
+        try:
+            self.logger.info(f"Peer disconnected: {peer.id}")
+            # Update peer list using asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self.update_peer_list())
+            else:
+                asyncio.run(self.update_peer_list())
+        except Exception as e:
+            self.logger.error(f"Error handling peer disconnection: {e}")
 
     def cleanup(self):
         """Clean up resources before closing."""
