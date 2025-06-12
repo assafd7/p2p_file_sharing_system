@@ -285,6 +285,42 @@ class DHT:
                 self.routing_table[peer.id] = peer
         self.logger.debug("Updated routing table")
 
+    async def broadcast_peer_list(self):
+        """Broadcast the current peer list to all connected peers."""
+        try:
+            peers = self.get_connected_peers()
+            peer_list_msg = Message.create(
+                MessageType.PEER_LIST,
+                self.node_id,
+                {"peers": [{"id": p.id, "address": p.address, "port": p.port} for p in peers]}
+            )
+            
+            for peer in self.peers.values():
+                if peer.is_connected:
+                    try:
+                        await peer.send_message(peer_list_msg)
+                    except Exception as e:
+                        self.logger.error(f"Error broadcasting peer list to {peer.peer_id}: {e}")
+        except Exception as e:
+            self.logger.error(f"Error broadcasting peer list: {e}")
+
+    async def handle_peer_list(self, message: Message):
+        """Handle incoming peer list updates."""
+        try:
+            peers = message.data.get("peers", [])
+            for peer_info in peers:
+                if peer_info["id"] != self.node_id:  # Don't add ourselves
+                    peer = Peer(peer_info["address"], peer_info["port"], peer_info["id"])
+                    if peer.peer_id not in self.peers:
+                        if await peer.connect():
+                            self.peers[peer.peer_id] = peer
+                            # Register message handlers
+                            peer.register_handler(MessageType.PEER_LIST, self.handle_peer_list)
+                            # Start listening for messages
+                            asyncio.create_task(peer.start_listening())
+        except Exception as e:
+            self.logger.error(f"Error handling peer list: {e}")
+
     async def connect_to_peer(self, host: str, port: int) -> bool:
         """Connect to a peer using the specified host and port."""
         try:
@@ -314,18 +350,14 @@ class DHT:
             if await peer.connect():
                 self.peers[peer.peer_id] = peer
                 
-                # Add peer to k-bucket
-                peer_info = PeerInfo(
-                    id=peer.peer_id,
-                    address=host,
-                    port=port,
-                    last_seen=datetime.now(),
-                    is_connected=True
-                )
-                self.add_node(peer_info)
+                # Register message handlers
+                peer.register_handler(MessageType.PEER_LIST, self.handle_peer_list)
                 
-                # Start listening for messages from this peer
+                # Start listening for messages
                 asyncio.create_task(peer.start_listening())
+                
+                # Broadcast updated peer list
+                await self.broadcast_peer_list()
                 
                 self.logger.info(f"Connected to peer {host}:{port}")
                 return True
@@ -359,10 +391,10 @@ class DHT:
             # Initialize routing table
             self.routing_table = {}
 
-            # Create local peer and start listening
-            self.local_peer = Peer(self.host, self.port, self.node_id)
+            # Create local peer and start listening on all interfaces
+            self.local_peer = Peer("0.0.0.0", self.port, self.node_id)
             asyncio.create_task(self.local_peer.start_listening())
-            self.logger.info(f"Local peer started listening on {self.host}:{self.port}")
+            self.logger.info(f"Local peer started listening on 0.0.0.0:{self.port}")
 
             # Start periodic cleanup
             asyncio.create_task(self._periodic_cleanup())
