@@ -50,6 +50,7 @@ class Peer:
         self.port = port
         self.peer_id = peer_id or str(uuid.uuid4())
         self.id = self.peer_id  # Add id property for compatibility
+        self.address = self.host  # Add address property for compatibility
         self.reader = reader
         self.writer = writer
         self.is_connected = bool(reader and writer)  # Set connected if reader/writer provided
