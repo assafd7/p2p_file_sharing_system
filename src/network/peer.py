@@ -474,9 +474,9 @@ class Peer:
                 try:
                     # Send heartbeat message
                     heartbeat_msg = Message(
-                        msg_type=MessageType.HEARTBEAT,
+                        type=MessageType.HEARTBEAT,
                         sender_id=self.peer_id,
-                        data={"timestamp": time.time()}
+                        payload={"timestamp": time.time()}
                     )
                     
                     if not await self.send_message(heartbeat_msg):

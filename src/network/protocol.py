@@ -15,6 +15,7 @@ class MessageType(Enum):
     FILE_RESPONSE = "FILE_RESPONSE"
     PEER_LIST = "PEER_LIST"
     GOODBYE = "GOODBYE"
+    HEARTBEAT = "HEARTBEAT"
 
 @dataclass
 class Message:
