@@ -5,98 +5,62 @@ from datetime import datetime
 import logging
 import aiosqlite
 from pathlib import Path
-import os
 
 class DatabaseManager:
-    """Manages database operations for the P2P network."""
-    
-    def __init__(self, db_path: str = "p2p_network.db"):
-        """Initialize the database manager."""
+    def __init__(self, db_path: str):
+        """Initialize database manager."""
         self.db_path = db_path
         self.logger = logging.getLogger(__name__)
         self._connection = None
         self._initialize_db()
 
     def _initialize_db(self):
-        """Initialize the database with proper schema."""
+        """Initialize database tables."""
         try:
-            # Check if database exists and has correct schema
-            db_exists = os.path.exists(self.db_path)
-            needs_recreation = False
-            
-            if db_exists:
-                # Check if schema needs update
-                try:
-                    with self.get_connection() as conn:
-                        cursor = conn.execute("PRAGMA table_info(peers)")
-                        columns = {row[1] for row in cursor.fetchall()}
-                        if 'username' not in columns:
-                            self.logger.info("Database schema needs update. Recreating database...")
-                            needs_recreation = True
-                except Exception as e:
-                    self.logger.warning(f"Error checking database schema: {e}")
-                    needs_recreation = True
-            
-            # Recreate database if needed
-            if needs_recreation:
-                try:
-                    if os.path.exists(self.db_path):
-                        os.remove(self.db_path)
-                    self.logger.info("Creating new database with updated schema...")
-                    self._create_tables()
-                    self.logger.info("Database initialized successfully")
-                except Exception as e:
-                    self.logger.error(f"Error recreating database: {e}")
-                    raise
-            elif not db_exists:
-                self.logger.info("Creating new database...")
-                self._create_tables()
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Create users table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        user_id TEXT PRIMARY KEY,
+                        username TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                # Create peers table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS peers (
+                        id TEXT PRIMARY KEY,
+                        address TEXT NOT NULL,
+                        port INTEGER NOT NULL,
+                        username TEXT,
+                        last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                # Create files table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS files (
+                        file_id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        size INTEGER NOT NULL,
+                        type TEXT NOT NULL,
+                        owner_id TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (owner_id) REFERENCES users(user_id)
+                    )
+                """)
+                
+                conn.commit()
                 self.logger.info("Database initialized successfully")
                 
         except Exception as e:
             self.logger.error(f"Error initializing database: {e}")
             raise
-
-    def _create_tables(self):
-        """Create necessary database tables if they don't exist."""
-        with self.get_connection() as conn:
-            # Create peers table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS peers (
-                    id TEXT PRIMARY KEY,
-                    address TEXT NOT NULL,
-                    port INTEGER NOT NULL,
-                    username TEXT,
-                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            
-            # Create files table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS files (
-                    hash TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    size INTEGER NOT NULL,
-                    owner_id TEXT NOT NULL,
-                    shared BOOLEAN DEFAULT 0,
-                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (owner_id) REFERENCES peers(id)
-                )
-            """)
-            
-            # Create file_peers table for tracking which peers have which files
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS file_peers (
-                    file_hash TEXT,
-                    peer_id TEXT,
-                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (file_hash, peer_id),
-                    FOREIGN KEY (file_hash) REFERENCES files(hash),
-                    FOREIGN KEY (peer_id) REFERENCES peers(id)
-                )
-            """)
-            
-            conn.commit()
 
     def get_connection(self):
         """Get a database connection."""
