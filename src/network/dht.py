@@ -7,7 +7,7 @@ from datetime import datetime
 import logging
 from .protocol import Message, MessageType
 from .peer import Peer, PeerInfo
-from .database import DatabaseManager
+from src.database.db_manager import DatabaseManager
 
 class DHTError(Exception):
     """Base exception class for DHT-related errors."""
