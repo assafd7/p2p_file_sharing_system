@@ -287,105 +287,92 @@ class DHT:
 
     async def broadcast_peer_list(self):
         """Broadcast the current peer list to all connected peers."""
-        try:
-            # Get connected peers
-            connected_peers = self.get_connected_peers()
+        if not self.peers:
+            return
             
-            # For each peer, send only the peers they don't know about
-            for peer in self.peers.values():
-                if not peer.is_connected:
-                    continue
-                    
-                # Get peers that this peer doesn't know about
-                new_peers = []
-                for p in connected_peers:
-                    if p.id != peer.peer_id and p.id != self.node_id:
-                        # Check if this peer already knows about this peer
-                        if not any(known.id == p.id for known in peer.get_known_peers()):
-                            new_peers.append({
-                                "id": p.id,
-                                "address": p.address,
-                                "port": p.port
-                            })
-                            
-                            # Limit to 10 new peers per message
-                            if len(new_peers) >= 10:
-                                break
-                
-                if new_peers:
-                    try:
-                        peer_list_msg = Message.create(
-                            MessageType.PEER_LIST,
-                            self.node_id,
-                            {"peers": new_peers}
-                        )
-                        await peer.send_message(peer_list_msg)
-                    except Exception as e:
-                        self.logger.error(f"Error sending peer list to {peer.peer_id}: {e}")
-                        
-        except Exception as e:
-            self.logger.error(f"Error broadcasting peer list: {e}")
+        # Get list of connected peers
+        connected_peers = [p for p in self.peers.values() if p.is_connected]
+        if not connected_peers:
+            return
+            
+        # Create peer list message with minimal data
+        peer_list = []
+        for peer in connected_peers:
+            peer_list.append({
+                'peer_id': peer.peer_id,
+                'host': peer.host,
+                'port': peer.port
+            })
+            
+        # Split peer list into smaller chunks if needed
+        chunk_size = 50  # Maximum peers per message
+        for i in range(0, len(peer_list), chunk_size):
+            chunk = peer_list[i:i + chunk_size]
+            message = Message(
+                type=MessageType.PEER_LIST,
+                sender_id=self.local_peer.peer_id,
+                payload={
+                    'peers': chunk,
+                    'chunk_index': i // chunk_size,
+                    'total_chunks': (len(peer_list) + chunk_size - 1) // chunk_size
+                }
+            )
+            
+            # Send to each connected peer
+            for peer in connected_peers:
+                try:
+                    if peer.is_connected:
+                        await peer.send_message(message)
+                except Exception as e:
+                    self.logger.error(f"Error sending peer list to {peer.host}:{peer.port}: {e}")
 
     async def handle_peer_list(self, message: Message):
-        """Handle incoming peer list updates."""
+        """Handle incoming peer list message."""
         try:
-            peers = message.data.get("peers", [])
-            for peer_info in peers:
-                if peer_info["id"] != self.node_id:  # Don't add ourselves
-                    # Check if we already know this peer
-                    if peer_info["id"] in self.peers:
+            peers_data = message.payload.get('peers', [])
+            chunk_index = message.payload.get('chunk_index', 0)
+            total_chunks = message.payload.get('total_chunks', 1)
+            
+            # Store chunk in temporary storage
+            if not hasattr(self, '_peer_list_chunks'):
+                self._peer_list_chunks = {}
+            self._peer_list_chunks[chunk_index] = peers_data
+            
+            # If we have all chunks, process them
+            if len(self._peer_list_chunks) == total_chunks:
+                # Combine all chunks
+                all_peers = []
+                for i in range(total_chunks):
+                    all_peers.extend(self._peer_list_chunks[i])
+                    
+                # Clear temporary storage
+                self._peer_list_chunks = {}
+                
+                # Process combined peer list
+                for peer_data in all_peers:
+                    peer_id = peer_data.get('peer_id')
+                    host = peer_data.get('host')
+                    port = peer_data.get('port')
+                    
+                    if not all([peer_id, host, port]):
                         continue
                         
-                    # Create and connect to new peer
-                    peer = Peer(
-                        peer_info["address"],
-                        peer_info["port"],
-                        peer_info["id"],
-                        is_local=False
-                    )
-                    
+                    # Skip if it's our own peer info
+                    if peer_id == self.local_peer.peer_id:
+                        continue
+                        
+                    # Skip if we already know this peer
+                    if peer_id in self.peers:
+                        continue
+                        
+                    # Try to connect to the new peer
                     try:
-                        if await peer.connect():
-                            self.peers[peer.peer_id] = peer
-                            # Register message handlers
-                            peer.register_handler(MessageType.PEER_LIST, self.handle_peer_list)
-                            
-                            # Send our peer list to the new peer
-                            await self.send_peer_list_to_peer(peer)
+                        await self.connect_to_peer(host, port)
                     except Exception as e:
-                        self.logger.error(f"Error connecting to peer {peer_info['id']}: {e}")
+                        self.logger.error(f"Error connecting to peer {host}:{port}: {e}")
+                        
         except Exception as e:
             self.logger.error(f"Error handling peer list: {e}")
-
-    async def send_peer_list_to_peer(self, peer: Peer):
-        """Send our peer list to a specific peer."""
-        try:
-            # Get connected peers
-            connected_peers = self.get_connected_peers()
-            
-            # Send only peers that the target peer doesn't know about
-            new_peers = []
-            for p in connected_peers:
-                if p.id != peer.peer_id and p.id != self.node_id:
-                    new_peers.append({
-                        "id": p.id,
-                        "address": p.address,
-                        "port": p.port
-                    })
-                    
-                    # Limit to 10 peers per message
-                    if len(new_peers) >= 10:
-                        break
-            
-            if new_peers:
-                peer_list_msg = Message.create(
-                    MessageType.PEER_LIST,
-                    self.node_id,
-                    {"peers": new_peers}
-                )
-                await peer.send_message(peer_list_msg)
-        except Exception as e:
-            self.logger.error(f"Error sending peer list to {peer.peer_id}: {e}")
 
     async def connect_to_peer(self, host: str, port: int) -> bool:
         """Connect to a peer using the specified host and port."""
