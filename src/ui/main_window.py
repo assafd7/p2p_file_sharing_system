@@ -269,9 +269,8 @@ class MainWindow(QMainWindow):
             self.delete_file(file_info=file_info)
 
     def share_file(self):
-        """Handle file sharing."""
+        """Share a file with the network."""
         try:
-            # Get file path from user
             file_path, _ = QFileDialog.getOpenFileName(
                 self,
                 "Select File to Share",
@@ -280,23 +279,12 @@ class MainWindow(QMainWindow):
             )
             
             if not file_path:
-                self.logger.debug("File selection cancelled by user")
                 return
                 
-            self.logger.debug(f"Selected file for sharing: {file_path}")
-            
-            # Verify file exists and is readable
-            if not os.path.exists(file_path):
-                self.show_error(f"File does not exist: {file_path}")
-                return
-                
-            if not os.access(file_path, os.R_OK):
-                self.show_error(f"Cannot read file: {file_path}")
-                return
-            
-            # Add file to manager
             try:
+                # Add file to shared files
                 metadata = self.file_manager.add_file(file_path, self.user_id)
+                
                 if not metadata:
                     raise Exception("No metadata returned from file manager")
                     
@@ -304,12 +292,17 @@ class MainWindow(QMainWindow):
                 self.logger.debug(f"File metadata: {metadata}")
                 
                 # Verify file appears in shared files list
-                shared_files = self.file_manager.get_shared_files()
-                if not any(f.hash == metadata.hash for f in shared_files):
-                    raise Exception("File not found in shared files list after sharing")
+                async def verify_and_update():
+                    shared_files = await self.file_manager.get_shared_files_async()
+                    if not any(f.hash == metadata.hash for f in shared_files):
+                        raise Exception("File not found in shared files list after sharing")
+                    await self.update_file_list()
+                
+                # Run verification in event loop
+                loop = asyncio.get_event_loop()
+                loop.create_task(verify_and_update())
                 
                 self.show_info(f"File shared: {file_path}")
-                self.update_file_list()
                 
             except Exception as e:
                 self.logger.error(f"Error sharing file: {str(e)}")
@@ -371,7 +364,11 @@ class MainWindow(QMainWindow):
             try:
                 self.file_manager.delete_file(file_info.hash, self.user_id)
                 self.show_info(f"File deleted: {file_info.name}")
-                self.update_file_list()
+                
+                # Update file list asynchronously
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.update_file_list())
+                
             except Exception as e:
                 self.show_error(f"Error deleting file: {e}")
 
@@ -486,7 +483,8 @@ class MainWindow(QMainWindow):
     def update_ui(self):
         """Update UI elements with current data."""
         # Update file list
-        self.update_file_list()
+        loop = asyncio.get_event_loop()
+        loop.create_task(self.update_file_list())
         
         # Update transfer list
         self.update_transfer_list()
@@ -494,13 +492,13 @@ class MainWindow(QMainWindow):
         # Update peer list
         self.update_peer_list()
 
-    def update_file_list(self):
+    async def update_file_list(self):
         """Update the file list display."""
         self.logger.debug("Updating file list...")
         self.file_list.clear()
         
         try:
-            files = self.file_manager.get_shared_files()
+            files = await self.file_manager.get_shared_files_async()
             self.logger.debug(f"Retrieved {len(files)} files from file manager")
             
             if not files:
@@ -508,25 +506,17 @@ class MainWindow(QMainWindow):
                 return
             
             for file_info in files:
-                self.logger.debug(f"Adding file to list: {file_info.name}")
                 item = QTreeWidgetItem(self.file_list)
                 item.setText(0, file_info.name)
                 item.setText(1, self.format_size(file_info.size))
                 item.setText(2, file_info.owner_id)
-                item.setText(3, file_info.modified_at.strftime("%Y-%m-%d %H:%M:%S"))
                 item.setData(0, Qt.ItemDataRole.UserRole, file_info)
+                
+            self.logger.debug("File list updated successfully")
             
-            # Ensure the file list is visible and columns are properly sized
-            self.file_list.setVisible(True)
-            self.file_list.resizeColumnToContents(0)
-            self.file_list.resizeColumnToContents(1)
-            self.file_list.resizeColumnToContents(2)
-            self.file_list.resizeColumnToContents(3)
-            self.logger.debug("File list update completed")
-        
         except Exception as e:
             self.logger.error(f"Error updating file list: {e}")
-            self.show_error(f"Error updating file list: {e}")
+            self.show_error(f"Error updating file list: {str(e)}")
 
     def format_size(self, size_bytes):
         """Format file size in human-readable format."""
