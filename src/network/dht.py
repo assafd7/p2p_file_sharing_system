@@ -5,8 +5,8 @@ from typing import Dict, List, Set, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
-from .protocol import Message, MessageType
-from .peer import Peer, PeerInfo
+from protocol import Message, MessageType
+from peer import Peer, PeerInfo
 
 @dataclass
 class KBucket:
@@ -345,4 +345,48 @@ class DHT:
                     is_connected=True
                 )
                 connected_peers.append(peer_info)
-        return connected_peers 
+        return connected_peers
+
+    async def start(self):
+        """Start the DHT network."""
+        try:
+            self.logger.info("Starting DHT network")
+
+            # Initialize routing table
+            self.routing_table = {}
+
+            # Start periodic cleanup
+            asyncio.create_task(self._periodic_cleanup())
+
+            # Start periodic peer health checks
+            asyncio.create_task(self._periodic_health_check())
+
+            self.logger.info("DHT network started successfully")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to start DHT network: {e}")
+            return False
+
+    async def _periodic_cleanup(self):
+        """Periodically clean up old nodes and merge buckets."""
+        while True:
+            try:
+                self.cleanup()
+                await asyncio.sleep(3600)  # Run every hour
+            except Exception as e:
+                self.logger.error(f"Error in periodic cleanup: {e}")
+                await asyncio.sleep(60)  # Wait a minute before retrying
+
+    async def _periodic_health_check(self):
+        """Periodically check health of connected peers."""
+        while True:
+            try:
+                for peer in self.peers.values():
+                    if peer.is_connected:
+                        if not await peer.ping():
+                            self.logger.warning(f"Peer {peer.peer_id} failed health check")
+                            await self.remove_node(peer.peer_id)
+                await asyncio.sleep(300)  # Check every 5 minutes
+            except Exception as e:
+                self.logger.error(f"Error in periodic health check: {e}")
+                await asyncio.sleep(60)  # Wait a minute before retrying
