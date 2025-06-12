@@ -58,7 +58,7 @@ class Peer:
         self.is_local = is_local  # Add back is_local flag
         self.known_peers = set()  # Track known peers
         self.logger = logging.getLogger(f"Peer-{self.peer_id}")
-        self.last_activity = time.time()
+        self._last_activity = time.time()
         self.retry_count = 0
         self.retry_delay = INITIAL_RETRY_DELAY
         self.max_retries = MAX_RETRIES
@@ -72,6 +72,26 @@ class Peer:
         self.processing_task = None
         self._lock = asyncio.Lock()
         self.message_handlers: Dict[MessageType, Callable[[Message], Awaitable[None]]] = {}
+
+    @property
+    def last_activity(self) -> float:
+        """Get the last activity timestamp."""
+        return self._last_activity
+
+    @last_activity.setter
+    def last_activity(self, value: float):
+        """Set the last activity timestamp."""
+        self._last_activity = value
+
+    @property
+    def last_seen(self) -> float:
+        """Get the last seen timestamp (alias for last_activity)."""
+        return self._last_activity
+
+    @last_seen.setter
+    def last_seen(self, value: float):
+        """Set the last seen timestamp (alias for last_activity)."""
+        self._last_activity = value
 
     def _generate_peer_id(self) -> str:
         """Generate a unique peer ID based on host and port."""
