@@ -5,7 +5,17 @@ from typing import Optional, Dict, Set, Callable, Awaitable
 from dataclasses import dataclass
 from datetime import datetime
 import logging
-from .protocol import Message, MessageType, ProtocolError, CHUNK_SIZE, CONNECTION_TIMEOUT, READ_TIMEOUT
+from .protocol import (
+    Message, 
+    MessageType, 
+    ProtocolError, 
+    CHUNK_SIZE, 
+    CONNECTION_TIMEOUT, 
+    READ_TIMEOUT,
+    MAX_RETRIES,
+    INITIAL_RETRY_DELAY,
+    MAX_RETRY_DELAY
+)
 
 @dataclass
 class PeerInfo:
