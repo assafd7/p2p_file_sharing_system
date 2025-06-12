@@ -1,24 +1,11 @@
 import asyncio
 import socket
 import hashlib
-from typing import Optional, Dict, Set, Callable, Awaitable
+from typing import Optional, Dict, Set, Callable, Awaitable, Any
 from dataclasses import dataclass
 from datetime import datetime
 import logging
-from .protocol import (
-    Message, 
-    MessageType, 
-    ProtocolError, 
-    CHUNK_SIZE, 
-    CONNECTION_TIMEOUT, 
-    READ_TIMEOUT,
-    MAX_RETRIES,
-    INITIAL_RETRY_DELAY,
-    MAX_RETRY_DELAY,
-    MAX_MESSAGE_SIZE,
-    MessageSizeError,
-    InvalidMessageError
-)
+from .protocol_v2 import Message, MessageType, MessageReader, MessageWriter, ProtocolError
 import uuid
 import time
 
@@ -32,6 +19,8 @@ INITIAL_RETRY_DELAY = 1.0  # seconds
 MAX_RETRIES = 3
 CHUNK_SIZE = 8192  # 8KB chunks for reading/writing
 
+logger = logging.getLogger(__name__)
+
 @dataclass
 class PeerInfo:
     """Information about a peer in the network."""
@@ -42,16 +31,15 @@ class PeerInfo:
     is_connected: bool = False
 
 class Peer:
-    def __init__(self, host: str, port: int, peer_id: str = None, is_local: bool = False):
+    def __init__(self, host: str, port: int, peer_id: Optional[str] = None, is_local: bool = False):
         """Initialize a peer connection."""
         self.host = host
         self.port = port
         self.peer_id = peer_id or str(uuid.uuid4())
-        self.reader = None
-        self.writer = None
+        self.is_local = is_local
         self.is_connected = False
-        self.is_disconnecting = False  # Add flag to track disconnection state
-        self.is_local = is_local  # Add back is_local flag
+        self.reader: Optional[MessageReader] = None
+        self.writer: Optional[MessageWriter] = None
         self.known_peers = set()  # Track known peers
         self.logger = logging.getLogger(f"Peer-{self.peer_id}")
         self.last_activity = time.time()
@@ -63,10 +51,8 @@ class Peer:
         self.write_timeout = WRITE_TIMEOUT
         self.heartbeat_interval = HEARTBEAT_INTERVAL
         self.heartbeat_timeout = HEARTBEAT_TIMEOUT
-        self.heartbeat_task = None
-        self.message_queue = asyncio.Queue()
-        self.processing_task = None
-        self._lock = asyncio.Lock()
+        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._message_processor_task: Optional[asyncio.Task] = None
         self.message_handlers: Dict[MessageType, Callable[[Message], Awaitable[None]]] = {}
 
     def _generate_peer_id(self) -> str:
@@ -76,77 +62,44 @@ class Peer:
 
     async def connect(self) -> bool:
         """Connect to the peer."""
-        if self.is_connected:
+        try:
+            # Create connection
+            reader, writer = await asyncio.open_connection(self.host, self.port)
+            
+            # Initialize message reader and writer
+            self.reader = MessageReader(reader)
+            self.writer = MessageWriter(writer)
+            self.is_connected = True
+            
+            # Start message processing
+            self._message_processor_task = asyncio.create_task(self._process_messages())
+            
+            # Start heartbeat if not local
+            if not self.is_local:
+                self._heartbeat_task = asyncio.create_task(self._heartbeat())
+            
+            logger.info(f"Connected to peer {self.host}:{self.port}")
             return True
             
-        for attempt in range(self.max_retries):
-            try:
-                self.logger.info(f"Attempting to connect to {self.host}:{self.port} (attempt {attempt + 1}/{self.max_retries})")
-                
-                # Create connection with timeouts
-                self.reader, self.writer = await asyncio.wait_for(
-                    asyncio.open_connection(self.host, self.port),
-                    timeout=self.connection_timeout
-                )
-                
-                # Verify connection was successful
-                if not self.reader or not self.writer:
-                    raise ConnectionError("Failed to establish connection")
-                    
-                self.is_connected = True
-                self.logger.info(f"Connected to peer {self.host}:{self.port}")
-                
-                # Start message processing
-                self.processing_task = asyncio.create_task(self._process_messages())
-                
-                # Start heartbeat if not local
-                if not self.is_local:
-                    self.heartbeat_task = asyncio.create_task(self._heartbeat())
-                    
-                return True
-                
-            except asyncio.TimeoutError:
-                self.logger.error(f"Connection timeout to {self.host}:{self.port}")
-            except ConnectionRefusedError:
-                self.logger.error(f"Connection refused by {self.host}:{self.port}")
-            except Exception as e:
-                self.logger.error(f"Error connecting to {self.host}:{self.port}: {e}")
-                
-            # Wait before retrying
-            if attempt < self.max_retries - 1:
-                await asyncio.sleep(self.retry_delay * (attempt + 1))
-                
-        return False
+        except Exception as e:
+            logger.error(f"Error connecting to peer {self.host}:{self.port}: {e}")
+            await self.disconnect()
+            return False
 
     async def disconnect(self, send_goodbye: bool = True) -> None:
         """Disconnect from the peer."""
-        if self.is_disconnecting:  # Prevent recursive disconnects
-            return
-            
-        self.is_disconnecting = True
-        self.is_connected = False
-        
         try:
-            # Cancel heartbeat task if it exists
-            if self.heartbeat_task:
-                self.heartbeat_task.cancel()
-                try:
-                    await self.heartbeat_task
-                except asyncio.CancelledError:
-                    pass
-                self.heartbeat_task = None
+            # Cancel tasks
+            if self._heartbeat_task:
+                self._heartbeat_task.cancel()
+                self._heartbeat_task = None
                 
-            # Cancel message processing task if it exists
-            if self.processing_task:
-                self.processing_task.cancel()
-                try:
-                    await self.processing_task
-                except asyncio.CancelledError:
-                    pass
-                self.processing_task = None
-                
+            if self._message_processor_task:
+                self._message_processor_task.cancel()
+                self._message_processor_task = None
+            
             # Send goodbye message if requested and still connected
-            if send_goodbye and self.writer and not self.writer.is_closing():
+            if send_goodbye and self.writer and not self.writer.writer.is_closing():
                 try:
                     goodbye_msg = Message(
                         msg_type=MessageType.GOODBYE,
@@ -157,181 +110,31 @@ class Peer:
                 except Exception as e:
                     self.logger.debug(f"Error sending goodbye message: {e}")
                     
-            # Close writer if it exists
+            # Close writer
             if self.writer:
-                try:
-                    self.writer.close()
-                    await self.writer.wait_closed()
-                except Exception as e:
-                    self.logger.debug(f"Error closing writer: {e}")
-                    
+                self.writer.writer.close()
+                await self.writer.writer.wait_closed()
+                self.writer = None
+            
             self.reader = None
-            self.writer = None
-            self.logger.info("Disconnected from peer")
+            self.is_connected = False
+            logger.info(f"Disconnected from peer {self.host}:{self.port}")
             
         except Exception as e:
-            self.logger.error(f"Error during disconnect: {e}")
-        finally:
-            self.is_disconnecting = False
+            logger.error(f"Error disconnecting from peer {self.host}:{self.port}: {e}")
 
     async def send_message(self, message: Message) -> bool:
         """Send a message to the peer."""
-        if not self.is_connected:
-            self.logger.debug("Cannot send message: not connected")
-            return False
-            
-        if not self.writer:
-            self.logger.debug("Cannot send message: no writer")
-            return False
-            
-        if self.is_disconnecting:
-            self.logger.debug("Cannot send message: disconnecting")
-            return False
-            
-        if self.writer.is_closing():
-            self.logger.debug("Cannot send message: writer is closing")
+        if not self.is_connected or not self.writer:
+            logger.error(f"Cannot send message: not connected to peer {self.host}:{self.port}")
             return False
             
         try:
-            # Serialize message
-            try:
-                data = message.serialize()
-                if not data:
-                    self.logger.error("Failed to serialize message")
-                    return False
-            except Exception as e:
-                self.logger.error(f"Error serializing message: {e}")
-                return False
-                
-            # Send data in chunks
-            total_sent = 0
-            while total_sent < len(data):
-                try:
-                    # Check writer state before each write
-                    if not self.writer or self.writer.is_closing():
-                        self.logger.error("Writer became invalid during send")
-                        return False
-                        
-                    # Write chunk
-                    chunk = data[total_sent:total_sent + CHUNK_SIZE]
-                    self.writer.write(chunk)
-                    total_sent += len(chunk)
-                    self.logger.debug(f"Sent {total_sent}/{len(data)} bytes")
-                    
-                except Exception as e:
-                    self.logger.error(f"Error writing chunk: {e}")
-                    return False
-                    
-            # Drain writer
-            try:
-                await asyncio.wait_for(
-                    self.writer.drain(),
-                    timeout=WRITE_TIMEOUT
-                )
-                return True
-            except asyncio.TimeoutError:
-                self.logger.error("Timeout draining writer")
-                return False
-            except Exception as e:
-                self.logger.error(f"Error draining writer: {e}")
-                return False
-                
+            return await self.writer.write_message(message)
         except Exception as e:
-            self.logger.error(f"Error sending message: {e}")
-            return False
-
-    async def receive_message(self) -> Optional[Message]:
-        """Receive a message from the peer."""
-        if not self.is_connected or not self.reader:
-            raise ConnectionError("Not connected to peer")
-            
-        try:
-            # Read message length (4 bytes)
-            try:
-                length_data = await asyncio.wait_for(
-                    self.reader.readexactly(4),
-                    timeout=READ_TIMEOUT
-                )
-            except asyncio.TimeoutError:
-                self.logger.error("Timeout reading message length")
-                await self.disconnect()
-                return None
-            except asyncio.IncompleteReadError:
-                self.logger.error("Connection closed while reading message length")
-                await self.disconnect()
-                return None
-                
-            # Verify length prefix bytes
-            if len(length_data) != 4:
-                self.logger.error(f"Invalid length prefix size: {len(length_data)} bytes")
-                await self.disconnect()
-                return None
-                
-            # Convert to integer and validate
-            try:
-                length = int.from_bytes(length_data, byteorder='big')
-                self.logger.debug(f"Received message length: {length} bytes")
-            except ValueError as e:
-                self.logger.error(f"Invalid message length data: {e}")
-                await self.disconnect()
-                return None
-                
-            # Validate length
-            if length <= 0:
-                self.logger.error(f"Invalid message length: {length}")
-                await self.disconnect()
-                return None
-            if length > MAX_MESSAGE_SIZE:
-                self.logger.error(f"Message too large: {length} bytes")
-                await self.disconnect()
-                return None
-                
-            # Read message data with progress tracking
-            try:
-                data = bytearray()
-                remaining = length
-                while remaining > 0:
-                    chunk = await asyncio.wait_for(
-                        self.reader.read(min(remaining, CHUNK_SIZE)),
-                        timeout=READ_TIMEOUT
-                    )
-                    if not chunk:
-                        self.logger.error("Connection closed while reading message data")
-                        await self.disconnect()
-                        return None
-                    data.extend(chunk)
-                    remaining -= len(chunk)
-                    self.logger.debug(f"Read {len(data)}/{length} bytes")
-            except asyncio.TimeoutError:
-                self.logger.error("Timeout reading message data")
-                await self.disconnect()
-                return None
-                
-            # Verify we got exactly the expected amount of data
-            if len(data) != length:
-                self.logger.error(f"Message size mismatch: expected {length}, got {len(data)}")
-                await self.disconnect()
-                return None
-                
-            try:
-                return Message.deserialize(bytes(data))
-            except MessageSizeError as e:
-                self.logger.error(f"Message size error: {e}")
-                await self.disconnect()
-                return None
-            except InvalidMessageError as e:
-                self.logger.error(f"Invalid message: {e}")
-                await self.disconnect()
-                return None
-            except Exception as e:
-                self.logger.error(f"Error deserializing message: {e}")
-                await self.disconnect()
-                return None
-                
-        except Exception as e:
-            self.logger.error(f"Error receiving message: {e}")
+            logger.error(f"Error sending message to peer {self.host}:{self.port}: {e}")
             await self.disconnect()
-            return None
+            return False
 
     def register_handler(self, message_type: MessageType, handler: Callable[[Message], Awaitable[None]]):
         """Register a message handler for a specific message type."""
@@ -369,14 +172,14 @@ class Peer:
             self.logger.info(f"New connection from {peer_addr[0]}:{peer_addr[1]}")
             
             # Store reader and writer
-            self.reader = reader
-            self.writer = writer
+            self.reader = MessageReader(reader)
+            self.writer = MessageWriter(writer)
             self.is_connected = True
             
             # Start message handling loop
             while self.is_connected:
                 try:
-                    message = await self.receive_message()
+                    message = await self.reader.read_message()
                     if message is None:
                         break
                         
@@ -423,76 +226,44 @@ class Peer:
 
     async def _process_messages(self):
         """Process incoming messages from the peer."""
+        if not self.reader:
+            return
+            
         try:
-            while self.is_connected and self.reader and not self.reader.at_eof():
-                try:
-                    message = await self.receive_message()
-                    if message:
-                        # Update last activity time
-                        self.last_activity = time.time()
-                        
-                        # Handle message based on type
-                        if message.msg_type in self.message_handlers:
-                            try:
-                                await self.message_handlers[message.msg_type](message)
-                            except Exception as e:
-                                self.logger.error(f"Error handling message {message.msg_type}: {e}")
-                        else:
-                            self.logger.warning(f"No handler for message type: {message.msg_type}")
-                            
-                except MessageSizeError as e:
-                    self.logger.error(f"Message size error: {e}")
-                    await self.disconnect(send_goodbye=False)
-                    break
-                except InvalidMessageError as e:
-                    self.logger.error(f"Invalid message: {e}")
-                    await self.disconnect(send_goodbye=False)
-                    break
-                except Exception as e:
-                    self.logger.error(f"Error processing message: {e}")
-                    await self.disconnect(send_goodbye=False)
+            while self.is_connected:
+                message = await self.reader.read_message()
+                if message is None:
                     break
                     
+                # Handle message
+                handler = self.message_handlers.get(message.type)
+                if handler:
+                    try:
+                        await handler(message)
+                    except Exception as e:
+                        self.logger.error(f"Error handling message from {self.host}:{self.host}: {e}")
+                else:
+                    self.logger.warning(f"No handler registered for message type {message.type}")
+                    
         except Exception as e:
-            self.logger.error(f"Error in message processing loop: {e}")
+            self.logger.error(f"Error processing messages from {self.host}:{self.port}: {e}")
         finally:
-            if self.is_connected:
-                await self.disconnect(send_goodbye=False)
+            await self.disconnect()
 
     async def _heartbeat(self):
         """Send periodic heartbeat messages to keep the connection alive."""
-        try:
-            while self.is_connected and not self.is_disconnecting:
-                try:
-                    # Check connection state
-                    if not self.is_connected or not self.writer or self.writer.is_closing():
-                        self.logger.debug("Connection no longer valid for heartbeat")
-                        break
-                        
-                    # Send heartbeat message
-                    heartbeat_msg = Message(
-                        type=MessageType.HEARTBEAT,
-                        sender_id=self.peer_id,
-                        payload={"timestamp": time.time()}
-                    )
-                    
-                    if not await self.send_message(heartbeat_msg):
-                        self.logger.error("Failed to send heartbeat")
-                        break
-                        
-                    # Wait for next heartbeat
-                    await asyncio.sleep(self.heartbeat_interval)
-                    
-                except Exception as e:
-                    self.logger.error(f"Error sending heartbeat: {e}")
-                    break
-                    
-        except Exception as e:
-            self.logger.error(f"Error in heartbeat loop: {e}")
-        finally:
-            if self.is_connected:
-                await self.disconnect(send_goodbye=False)
-
-    def register_message_handler(self, msg_type: MessageType, handler: Callable[[Message], Awaitable[None]]):
-        """Register a handler for a specific message type."""
-        self.message_handlers[msg_type] = handler 
+        while self.is_connected:
+            try:
+                message = Message(
+                    type=MessageType.HEARTBEAT,
+                    sender_id=self.peer_id,
+                    payload={'timestamp': asyncio.get_event_loop().time()}
+                )
+                await self.send_message(message)
+                await asyncio.sleep(self.heartbeat_interval)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.logger.error(f"Error sending heartbeat to {self.host}:{self.port}: {e}")
+                await self.disconnect()
+                break 
