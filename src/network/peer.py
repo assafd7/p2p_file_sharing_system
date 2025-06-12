@@ -14,7 +14,10 @@ from .protocol import (
     READ_TIMEOUT,
     MAX_RETRIES,
     INITIAL_RETRY_DELAY,
-    MAX_RETRY_DELAY
+    MAX_RETRY_DELAY,
+    MAX_MESSAGE_SIZE,
+    MessageSizeError,
+    InvalidMessageError
 )
 
 @dataclass
@@ -176,22 +179,70 @@ class Peer:
             
         try:
             # Read message length (4 bytes)
-            length_data = await self.reader.readexactly(4)
-            length = int.from_bytes(length_data, byteorder='big')
-            
-            if length > 1024 * 1024:  # 1MB limit
-                raise ProtocolError("Message too large")
+            try:
+                length_data = await asyncio.wait_for(
+                    self.reader.readexactly(4),
+                    timeout=READ_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                self.logger.error("Timeout reading message length")
+                await self.disconnect()
+                return None
+            except asyncio.IncompleteReadError:
+                self.logger.error("Connection closed while reading message length")
+                await self.disconnect()
+                return None
+                
+            try:
+                length = int.from_bytes(length_data, byteorder='big')
+            except ValueError as e:
+                self.logger.error(f"Invalid message length data: {e}")
+                await self.disconnect()
+                return None
+                
+            # Validate length
+            if length <= 0:
+                self.logger.error(f"Invalid message length: {length}")
+                await self.disconnect()
+                return None
+            if length > MAX_MESSAGE_SIZE:
+                self.logger.error(f"Message too large: {length} bytes")
+                await self.disconnect()
+                return None
                 
             # Read message data
-            data = await self.reader.readexactly(length)
-            return Message.deserialize(data)
-            
-        except asyncio.IncompleteReadError:
-            self.logger.error("Connection closed by peer")
-            await self.disconnect()
-            return None
+            try:
+                data = await asyncio.wait_for(
+                    self.reader.readexactly(length),
+                    timeout=READ_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                self.logger.error("Timeout reading message data")
+                await self.disconnect()
+                return None
+            except asyncio.IncompleteReadError:
+                self.logger.error("Connection closed while reading message data")
+                await self.disconnect()
+                return None
+                
+            try:
+                return Message.deserialize(data)
+            except MessageSizeError as e:
+                self.logger.error(f"Message size error: {e}")
+                await self.disconnect()
+                return None
+            except InvalidMessageError as e:
+                self.logger.error(f"Invalid message: {e}")
+                await self.disconnect()
+                return None
+            except Exception as e:
+                self.logger.error(f"Error deserializing message: {e}")
+                await self.disconnect()
+                return None
+                
         except Exception as e:
             self.logger.error(f"Error receiving message: {e}")
+            await self.disconnect()
             return None
 
     def register_handler(self, message_type: MessageType, handler: Callable[[Message], Awaitable[None]]):

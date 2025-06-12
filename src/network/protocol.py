@@ -29,43 +29,84 @@ class Message:
 
     def serialize(self) -> bytes:
         """Serialize message to bytes with length prefix."""
-        data = {
-            'type': self.type.value,
-            'sender_id': self.sender_id,
-            'payload': self.payload,
-            'timestamp': self.timestamp
-        }
-        json_data = json.dumps(data).encode('utf-8')
-        length = len(json_data)
-        
-        # Check message size
-        if length > MAX_MESSAGE_SIZE:
-            raise MessageSizeError(f"Message size ({length} bytes) exceeds limit of {MAX_MESSAGE_SIZE} bytes")
+        try:
+            data = {
+                'type': self.type.value,
+                'sender_id': self.sender_id,
+                'payload': self.payload,
+                'timestamp': self.timestamp
+            }
+            json_data = json.dumps(data).encode('utf-8')
+            length = len(json_data)
             
-        # Pack length as 4-byte big-endian integer
-        length_prefix = struct.pack('>I', length)
-        return length_prefix + json_data
+            # Validate length
+            if length <= 0:
+                raise InvalidMessageError("Message length must be positive")
+            if length > MAX_MESSAGE_SIZE:
+                raise MessageSizeError(f"Message size ({length} bytes) exceeds limit of {MAX_MESSAGE_SIZE} bytes")
+                
+            # Pack length as 4-byte big-endian integer
+            length_prefix = struct.pack('>I', length)
+            
+            # Verify the packed length
+            unpacked_length = struct.unpack('>I', length_prefix)[0]
+            if unpacked_length != length:
+                raise InvalidMessageError(f"Length verification failed: {length} != {unpacked_length}")
+                
+            return length_prefix + json_data
+            
+        except struct.error as e:
+            raise InvalidMessageError(f"Error packing message length: {e}")
+        except json.JSONDecodeError as e:
+            raise InvalidMessageError(f"Error serializing message to JSON: {e}")
+        except Exception as e:
+            raise InvalidMessageError(f"Error serializing message: {e}")
 
     @classmethod
     def deserialize(cls, data: bytes) -> 'Message':
         """Deserialize bytes to Message object."""
-        if len(data) < 4:
-            raise InvalidMessageError("Message too short")
+        try:
+            if len(data) < 4:
+                raise InvalidMessageError("Message too short (missing length prefix)")
+                
+            # Unpack length prefix
+            try:
+                length = struct.unpack('>I', data[:4])[0]
+            except struct.error as e:
+                raise InvalidMessageError(f"Error unpacking message length: {e}")
+                
+            # Validate length
+            if length <= 0:
+                raise InvalidMessageError(f"Invalid message length: {length}")
+            if length > MAX_MESSAGE_SIZE:
+                raise MessageSizeError(f"Message size ({length} bytes) exceeds limit of {MAX_MESSAGE_SIZE} bytes")
+            if length > len(data) - 4:
+                raise InvalidMessageError(f"Message length ({length}) exceeds available data ({len(data) - 4} bytes)")
+                
+            # Extract and decode JSON data
+            try:
+                json_data = data[4:4+length].decode('utf-8')
+                data_dict = json.loads(json_data)
+            except UnicodeDecodeError as e:
+                raise InvalidMessageError(f"Error decoding message data: {e}")
+            except json.JSONDecodeError as e:
+                raise InvalidMessageError(f"Error parsing message JSON: {e}")
+                
+            # Validate required fields
+            if not all(key in data_dict for key in ['type', 'sender_id', 'payload', 'timestamp']):
+                raise InvalidMessageError("Message missing required fields")
+                
+            return cls(
+                type=MessageType(data_dict['type']),
+                sender_id=data_dict['sender_id'],
+                payload=data_dict['payload'],
+                timestamp=data_dict['timestamp']
+            )
             
-        # Unpack length prefix
-        length = struct.unpack('>I', data[:4])[0]
-        if length > MAX_MESSAGE_SIZE:
-            raise MessageSizeError(f"Message size ({length} bytes) exceeds limit of {MAX_MESSAGE_SIZE} bytes")
-            
-        json_data = data[4:4+length].decode('utf-8')
-        data_dict = json.loads(json_data)
-        
-        return cls(
-            type=MessageType(data_dict['type']),
-            sender_id=data_dict['sender_id'],
-            payload=data_dict['payload'],
-            timestamp=data_dict['timestamp']
-        )
+        except Exception as e:
+            if not isinstance(e, (InvalidMessageError, MessageSizeError)):
+                raise InvalidMessageError(f"Error deserializing message: {e}")
+            raise
 
 class ProtocolError(Exception):
     """Base class for protocol-related errors."""
