@@ -198,71 +198,82 @@ class Peer:
             self.logger.error(f"Error sending message: {e}")
             return False
 
-    async def _read_message(self) -> Optional[Message]:
-        """Read a message from the peer."""
-        if not self.is_connected or not self.reader:
-            self.logger.error("Cannot read message: not connected")
+    async def read_message(self) -> Optional[Message]:
+        """Read a message from the peer with detailed validation."""
+        if not self.is_connected:
+            self.logger.debug("Cannot read message: not connected")
             return None
             
         try:
-            # Read length prefix
-            self.logger.debug("Reading message length prefix")
-            length_data = await self.reader.read(4)
-            if not length_data or len(length_data) < 4:
-                self.logger.error("Connection closed while reading message length")
-                await self.disconnect()
-                return None
+            # Step 1: Read length prefix
+            self.logger.debug("Step 1: Reading message length prefix")
+            length_data = await asyncio.wait_for(
+                self.reader.read(4),
+                timeout=self.read_timeout
+            )
             
-            # Unpack length
-            try:
-                length = struct.unpack('!I', length_data)[0]
-                self.logger.debug(f"Message length prefix: {length} bytes")
-            except struct.error as e:
-                self.logger.error(f"Error unpacking length prefix: {e}")
-                await self.disconnect()
-                return None
-            
-            # Validate length
-            if length <= 0:
-                self.logger.error(f"Invalid message length: {length}")
-                await self.disconnect()
+            if not length_data:
+                self.logger.debug("No data received when reading length prefix")
                 return None
                 
-            if length > MAX_MESSAGE_SIZE:
-                self.logger.error(f"Message size {length} exceeds limit of {MAX_MESSAGE_SIZE}")
-                await self.disconnect()
+            if len(length_data) != 4:
+                self.logger.error(f"Invalid length prefix size: {len(length_data)} bytes (expected 4)")
                 return None
-            
-            # Read message data in chunks
-            data = bytearray()
-            bytes_read = 0
-            chunk_size = 8192  # 8KB chunks
-            
-            while bytes_read < length:
-                try:
-                    chunk = await self.reader.read(min(chunk_size, length - bytes_read))
-                    if not chunk:
-                        self.logger.error("Connection closed while reading message data")
-                        await self.disconnect()
-                        return None
-                    data.extend(chunk)
-                    bytes_read += len(chunk)
-                    self.logger.debug(f"Read {bytes_read}/{length} bytes")
-                except Exception as e:
-                    self.logger.error(f"Error reading message chunk: {e}")
-                    await self.disconnect()
-                    return None
-            
-            # Deserialize message
+                
+            # Step 2: Unpack length
+            self.logger.debug("Step 2: Unpacking message length")
             try:
-                message = Message.deserialize(bytes(data))
+                message_length = struct.unpack('!I', length_data)[0]
+                self.logger.debug(f"Unpacked message length: {message_length} bytes")
+            except struct.error as e:
+                self.logger.error(f"Failed to unpack message length: {e}")
+                return None
+                
+            # Step 3: Validate length
+            if message_length <= 0:
+                self.logger.error(f"Invalid message length: {message_length} (must be positive)")
+                return None
+                
+            if message_length > MAX_MESSAGE_SIZE:
+                self.logger.error(f"Message length {message_length} exceeds maximum size {MAX_MESSAGE_SIZE}")
+                return None
+                
+            # Step 4: Read message data
+            self.logger.debug(f"Step 4: Reading message data ({message_length} bytes)")
+            try:
+                message_data = await asyncio.wait_for(
+                    self.reader.read(message_length),
+                    timeout=self.read_timeout
+                )
+            except asyncio.TimeoutError:
+                self.logger.error(f"Timeout reading message data after {self.read_timeout} seconds")
+                return None
+                
+            if not message_data:
+                self.logger.debug("No data received when reading message")
+                return None
+                
+            if len(message_data) != message_length:
+                self.logger.error(f"Message data length mismatch: got {len(message_data)}, expected {message_length}")
+                return None
+                
+            # Step 5: Deserialize message
+            self.logger.debug("Step 5: Deserializing message")
+            try:
+                message = Message.deserialize(message_data)
                 self.logger.debug(f"Successfully deserialized message of type {message.type}")
                 return message
             except Exception as e:
-                self.logger.error(f"Error deserializing message: {e}")
-                await self.disconnect()
+                self.logger.error(f"Failed to deserialize message: {e}")
                 return None
                 
+        except asyncio.TimeoutError:
+            self.logger.error(f"Timeout reading message length after {self.read_timeout} seconds")
+            return None
+        except ConnectionResetError:
+            self.logger.error("Connection reset while reading message")
+            await self.disconnect()
+            return None
         except Exception as e:
             self.logger.error(f"Error reading message: {e}")
             await self.disconnect()
@@ -361,7 +372,7 @@ class Peer:
         while self.is_connected and not self.is_disconnecting:
             try:
                 # Read message
-                message = await self._read_message()
+                message = await self.read_message()
                 if not message:
                     break
                     
@@ -384,7 +395,7 @@ class Peer:
 
     async def receive_message(self) -> Optional[Message]:
         """Receive a message from the peer."""
-        return await self._read_message()
+        return await self.read_message()
 
     async def _heartbeat(self):
         """Send periodic heartbeat messages to keep the connection alive."""
