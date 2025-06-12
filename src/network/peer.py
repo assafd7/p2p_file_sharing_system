@@ -43,21 +43,20 @@ class PeerInfo:
     is_connected: bool = False
 
 class Peer:
-    def __init__(self, host: str, port: int, peer_id: str = None, is_local: bool = False, 
-                 reader: Optional[asyncio.StreamReader] = None, writer: Optional[asyncio.StreamWriter] = None):
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, peer_id: str):
         """Initialize a peer connection."""
-        self.host = host
-        self.port = port
-        self.peer_id = peer_id or str(uuid.uuid4())
-        self.id = self.peer_id  # Add id property for compatibility
-        self.address = self.host  # Add address property for compatibility
         self.reader = reader
         self.writer = writer
-        self.is_connected = bool(reader and writer)  # Set connected if reader/writer provided
-        self.is_disconnecting = False  # Add flag to track disconnection state
-        self.is_local = is_local  # Add back is_local flag
-        self.known_peers = set()  # Track known peers
-        self.logger = logging.getLogger(f"Peer-{self.peer_id}")
+        self.id = peer_id
+        self.address = writer.get_extra_info('peername')[0]
+        self.port = writer.get_extra_info('peername')[1]
+        self.username = None
+        self.last_seen = time.time()
+        self.is_connected = True
+        self.logger = logging.getLogger(__name__)
+        self.is_disconnecting = False
+        self.is_local = False
+        self.known_peers = set()
         self._last_activity = time.time()
         self.retry_count = 0
         self.retry_delay = INITIAL_RETRY_DELAY
@@ -72,6 +71,26 @@ class Peer:
         self.processing_task = None
         self._lock = asyncio.Lock()
         self.message_handlers: Dict[MessageType, Callable[[Message], Awaitable[None]]] = {}
+
+    @property
+    def address(self) -> str:
+        """Get peer address."""
+        return self._address
+
+    @address.setter
+    def address(self, value: str):
+        """Set peer address."""
+        self._address = value
+
+    @property
+    def port(self) -> int:
+        """Get peer port."""
+        return self._port
+
+    @port.setter
+    def port(self, value: int):
+        """Set peer port."""
+        self._port = value
 
     @property
     def last_activity(self) -> float:
@@ -95,7 +114,7 @@ class Peer:
 
     def _generate_peer_id(self) -> str:
         """Generate a unique peer ID based on host and port."""
-        data = f"{self.host}:{self.port}".encode()
+        data = f"{self.address}:{self.port}".encode()
         return hashlib.sha1(data).hexdigest()
 
     async def connect(self) -> bool:
@@ -105,20 +124,14 @@ class Peer:
             
         for attempt in range(self.max_retries):
             try:
-                self.logger.info(f"Attempting to connect to {self.host}:{self.port} (attempt {attempt + 1}/{self.max_retries})")
-                
-                # Create connection with timeouts
-                self.reader, self.writer = await asyncio.wait_for(
-                    asyncio.open_connection(self.host, self.port),
-                    timeout=self.connection_timeout
-                )
+                self.logger.info(f"Attempting to connect to {self.address}:{self.port} (attempt {attempt + 1}/{self.max_retries})")
                 
                 # Verify connection was successful
                 if not self.reader or not self.writer:
                     raise ConnectionError("Failed to establish connection")
                     
                 self.is_connected = True
-                self.logger.info(f"Connected to peer {self.host}:{self.port}")
+                self.logger.info(f"Connected to peer {self.address}:{self.port}")
                 
                 # Start message processing
                 self.processing_task = asyncio.create_task(self._process_messages())
@@ -130,11 +143,11 @@ class Peer:
                 return True
                 
             except asyncio.TimeoutError:
-                self.logger.error(f"Connection timeout to {self.host}:{self.port}")
+                self.logger.error(f"Connection timeout to {self.address}:{self.port}")
             except ConnectionRefusedError:
-                self.logger.error(f"Connection refused by {self.host}:{self.port}")
+                self.logger.error(f"Connection refused by {self.address}:{self.port}")
             except Exception as e:
-                self.logger.error(f"Error connecting to {self.host}:{self.port}: {e}")
+                self.logger.error(f"Error connecting to {self.address}:{self.port}: {e}")
                 
             # Wait before retrying
             if attempt < self.max_retries - 1:
@@ -156,7 +169,7 @@ class Peer:
                     # Create goodbye message with correct parameter name
                     goodbye_msg = Message(
                         type=MessageType.GOODBYE,
-                        sender_id=self.peer_id,
+                        sender_id=self.id,
                         payload={'reason': 'disconnecting'}
                     )
                     await self.send_message(goodbye_msg)
@@ -189,7 +202,7 @@ class Peer:
             
         try:
             # Log message before sending
-            self.logger.debug(f"Sending message type {message.type} to {self.host}:{self.port}")
+            self.logger.debug(f"Sending message type {message.type} to {self.address}:{self.port}")
             
             # Serialize message
             try:
@@ -316,11 +329,11 @@ class Peer:
             # Create server socket
             server = await asyncio.start_server(
                 self._handle_connection,
-                self.host,
+                self.address,
                 self.port
             )
             
-            self.logger.info(f"Started listening on {self.host}:{self.port}")
+            self.logger.info(f"Started listening on {self.address}:{self.port}")
             
             # Keep the server running
             async with server:
@@ -369,7 +382,7 @@ class Peer:
         try:
             ping_msg = Message.create(
                 MessageType.PING,
-                self.peer_id,
+                self.id,
                 {"timestamp": datetime.now().timestamp()}
             )
             await self.send_message(ping_msg)
@@ -433,7 +446,7 @@ class Peer:
                     # Send heartbeat message
                     heartbeat_msg = Message(
                         type=MessageType.HEARTBEAT,
-                        sender_id=self.peer_id,
+                        sender_id=self.id,
                         payload={"timestamp": time.time()}
                     )
                     
@@ -485,3 +498,18 @@ class Peer:
         except Exception as e:
             self.logger.error(f"Error starting peer: {e}")
             return False 
+
+    async def close(self):
+        """Close the peer connection."""
+        try:
+            if self.writer:
+                self.writer.close()
+                await self.writer.wait_closed()
+            self.is_connected = False
+            self.logger.info(f"Closed connection to peer {self.id}")
+        except Exception as e:
+            self.logger.error(f"Error closing peer connection: {e}")
+
+    def update_last_seen(self):
+        """Update the last seen timestamp."""
+        self.last_seen = time.time() 

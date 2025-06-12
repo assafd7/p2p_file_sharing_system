@@ -701,3 +701,37 @@ class FileManager:
             self.logger.error(f"Error getting shared files: {e}")
             return []
 
+    def get_shared_files_sync(self) -> List[Dict]:
+        """Get list of shared files synchronously."""
+        try:
+            files = []
+            for file_path in self.storage_dir.glob('*'):
+                if file_path.is_file():
+                    file_info = {
+                        'name': file_path.name,
+                        'size': file_path.stat().st_size,
+                        'type': self._get_file_type(file_path),
+                        'status': 'Available'
+                    }
+                    files.append(file_info)
+            return files
+        except Exception as e:
+            self.logger.error(f"Error getting shared files: {e}")
+            return []
+
+    def _get_file_type(self, file_path: Path) -> str:
+        """Get file type based on extension."""
+        ext = file_path.suffix.lower()
+        if ext in ['.txt', '.md', '.py', '.js', '.html', '.css']:
+            return 'Text'
+        elif ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']:
+            return 'Image'
+        elif ext in ['.mp3', '.wav', '.ogg']:
+            return 'Audio'
+        elif ext in ['.mp4', '.avi', '.mkv']:
+            return 'Video'
+        elif ext in ['.zip', '.rar', '.7z', '.tar', '.gz']:
+            return 'Archive'
+        else:
+            return 'Other'
+
