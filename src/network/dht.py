@@ -214,14 +214,19 @@ class DHT:
             asyncio.create_task(self._process_messages(peer))
             
             # Send our username
-            await self.send_message(
-                Message(
-                    type=MessageType.USER_INFO,
-                    sender_id=self.node_id,
-                    payload={'username': self.username}
-                ),
-                peer
-            )
+            try:
+                await self.send_message(
+                    Message(
+                        type=MessageType.USER_INFO,
+                        sender_id=self.node_id,
+                        payload={'username': self.username}
+                    ),
+                    peer
+                )
+            except Exception as e:
+                self.logger.error(f"Error sending initial message to peer {peer_id}: {e}")
+                await self._handle_peer_disconnect(peer)
+                return
             
             # Notify UI
             if hasattr(self, 'on_peer_connected'):
@@ -229,8 +234,9 @@ class DHT:
                 
         except Exception as e:
             self.logger.error(f"Error handling connection: {e}")
-            writer.close()
-            await writer.wait_closed()
+            if writer:
+                writer.close()
+                await writer.wait_closed()
 
     async def handle_peer_list(self, message: Message, peer: Peer):
         """Handle peer list messages."""
@@ -279,14 +285,19 @@ class DHT:
             asyncio.create_task(self._process_messages(peer))
             
             # Send our username
-            await self.send_message(
-                Message(
-                    type=MessageType.USER_INFO,
-                    sender_id=self.node_id,
-                    payload={'username': self.username}
-                ),
-                peer
-            )
+            try:
+                await self.send_message(
+                    Message(
+                        type=MessageType.USER_INFO,
+                        sender_id=self.node_id,
+                        payload={'username': self.username}
+                    ),
+                    peer
+                )
+            except Exception as e:
+                self.logger.error(f"Error sending initial message to peer {peer_id}: {e}")
+                await self._handle_peer_disconnect(peer)
+                return None
             
             # Notify UI
             if hasattr(self, 'on_peer_connected'):
@@ -666,9 +677,16 @@ class DHT:
         """Handle peer disconnection."""
         try:
             if peer.id in self.peers:
+                # Close the connection
+                await peer.close()
+                
+                # Remove from peers list
                 del self.peers[peer.id]
+                
+                # Notify UI
                 if hasattr(self, 'on_peer_disconnected'):
                     self.on_peer_disconnected(peer)
+                    
                 self.logger.info(f"Peer disconnected: {peer.id}")
         except Exception as e:
             self.logger.error(f"Error handling peer disconnect: {e}")
@@ -676,17 +694,21 @@ class DHT:
     async def send_message(self, message: Message, peer: Peer):
         """Send a message to a peer."""
         try:
+            if not peer.writer or peer.writer.is_closing():
+                raise ConnectionError("Peer connection is closed")
+                
             # Serialize message
             data = message.serialize()
             
             # Send message length
             length = len(data)
-            await peer.writer.write(length.to_bytes(4, 'big'))
+            peer.writer.write(length.to_bytes(4, 'big'))
             
             # Send message data
-            await peer.writer.write(data)
+            peer.writer.write(data)
             await peer.writer.drain()
             
         except Exception as e:
             self.logger.error(f"Error sending message to peer {peer.id}: {e}")
             await self._handle_peer_disconnect(peer)
+            raise

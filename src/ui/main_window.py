@@ -159,7 +159,7 @@ class MainWindow(QMainWindow):
         return transfers_tab
 
     def setup_peers_tab(self):
-        """Set up the peers tab."""
+        """Setup the peers tab with peer list and controls."""
         peers_tab = QWidget()
         layout = QVBoxLayout()
         
@@ -172,20 +172,23 @@ class MainWindow(QMainWindow):
         self.peer_list.setColumnWidth(3, 100)  # Status column
         layout.addWidget(self.peer_list)
         
-        # Add buttons
+        # Create button layout
         button_layout = QHBoxLayout()
         
-        connect_button = QPushButton("Connect to Peer")
-        connect_button.clicked.connect(self.connect_to_peer)
-        button_layout.addWidget(connect_button)
+        # Connect button
+        self.connect_button = QPushButton("Connect to Peer")
+        self.connect_button.clicked.connect(self.connect_to_peer)
+        button_layout.addWidget(self.connect_button)
         
-        disconnect_button = QPushButton("Disconnect")
-        disconnect_button.clicked.connect(self.disconnect_from_peer)
-        button_layout.addWidget(disconnect_button)
+        # Disconnect button
+        self.disconnect_button = QPushButton("Disconnect")
+        self.disconnect_button.clicked.connect(self.disconnect_from_peer)
+        button_layout.addWidget(self.disconnect_button)
         
-        refresh_button = QPushButton("Refresh")
-        refresh_button.clicked.connect(self.update_peer_list)
-        button_layout.addWidget(refresh_button)
+        # Refresh button
+        self.refresh_button = QPushButton("Refresh")
+        self.refresh_button.clicked.connect(self.update_peer_list)
+        button_layout.addWidget(self.refresh_button)
         
         layout.addLayout(button_layout)
         peers_tab.setLayout(layout)
@@ -550,18 +553,22 @@ class MainWindow(QMainWindow):
             peers = self.network_manager.get_connected_peers()
             
             for peer in peers:
-                # Get peer info from database
-                peer_info = self.db_manager.get_peer_sync(peer.id)
-                username = peer_info.get('username', 'Unknown') if peer_info else 'Unknown'
-                
-                # Create peer list item
-                item = QTreeWidgetItem([
-                    username,
-                    peer.address,
-                    str(peer.port),
-                    "Connected"
-                ])
-                self.peer_list.addTopLevelItem(item)
+                try:
+                    # Get peer info from database
+                    peer_info = self.db_manager.get_peer_sync(peer.id)
+                    username = peer_info.get('username', 'Unknown') if peer_info else 'Unknown'
+                    
+                    # Create peer list item
+                    item = QTreeWidgetItem([
+                        username,
+                        peer.address,
+                        str(peer.port),
+                        "Connected"
+                    ])
+                    self.peer_list.addTopLevelItem(item)
+                except Exception as e:
+                    self.logger.error(f"Error adding peer to list: {e}")
+                    continue
                 
             # Resize columns to content
             for i in range(self.peer_list.columnCount()):
@@ -574,7 +581,8 @@ class MainWindow(QMainWindow):
         """Handle peer connection event."""
         try:
             self.logger.info(f"Peer connected: {peer.id}")
-            self.update_peer_list()
+            # Schedule UI update in the main thread
+            QTimer.singleShot(0, self.update_peer_list)
         except Exception as e:
             self.logger.error(f"Error handling peer connection: {e}")
 
@@ -582,7 +590,8 @@ class MainWindow(QMainWindow):
         """Handle peer disconnection event."""
         try:
             self.logger.info(f"Peer disconnected: {peer.id}")
-            self.update_peer_list()
+            # Schedule UI update in the main thread
+            QTimer.singleShot(0, self.update_peer_list)
         except Exception as e:
             self.logger.error(f"Error handling peer disconnection: {e}")
 
