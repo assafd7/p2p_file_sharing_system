@@ -22,6 +22,16 @@ from .protocol import (
 import uuid
 import time
 
+# Constants for timeouts and retries
+CONNECTION_TIMEOUT = 10.0  # seconds
+READ_TIMEOUT = 30.0  # seconds
+WRITE_TIMEOUT = 30.0  # seconds
+HEARTBEAT_INTERVAL = 30.0  # seconds
+HEARTBEAT_TIMEOUT = 10.0  # seconds
+INITIAL_RETRY_DELAY = 1.0  # seconds
+MAX_RETRIES = 3
+CHUNK_SIZE = 8192  # 8KB chunks for reading/writing
+
 @dataclass
 class PeerInfo:
     """Information about a peer in the network."""
