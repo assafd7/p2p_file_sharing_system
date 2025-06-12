@@ -107,6 +107,7 @@ class P2PFileSharingApp:
             self.dht = DHT(
                 host=local_ip,
                 port=DEFAULT_PORT,
+                db_manager=self.db_manager,
                 bootstrap_nodes=BOOTSTRAP_NODES,
                 username="Anonymous"  # Will be updated after authentication
             )

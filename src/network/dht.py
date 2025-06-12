@@ -7,6 +7,7 @@ from datetime import datetime
 import logging
 from .protocol import Message, MessageType
 from .peer import Peer, PeerInfo
+from .database import DatabaseManager
 
 class DHTError(Exception):
     """Base exception class for DHT-related errors."""
@@ -50,12 +51,14 @@ class KBucket:
 class DHT:
     """Distributed Hash Table for peer discovery and routing."""
     
-    def __init__(self, host: str, port: int, bootstrap_nodes: List[Tuple[str, int]] = None, username: str = "Anonymous"):
+    def __init__(self, host: str, port: int, db_manager: DatabaseManager, 
+                 bootstrap_nodes: List[Tuple[str, int]] = None, username: str = "Anonymous"):
         """Initialize the DHT network."""
         self.host = host
         self.port = port
         self.bootstrap_nodes = bootstrap_nodes or []
         self.username = username
+        self.db_manager = db_manager
         self.peers: Dict[str, Peer] = {}
         self.logger = logging.getLogger(__name__)
         self._server = None
