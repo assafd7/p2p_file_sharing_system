@@ -66,6 +66,10 @@ class DHT:
         """Get the node ID (host:port)."""
         return f"{self.host}:{self.port}"
         
+    def get_connected_peers(self) -> List[Peer]:
+        """Get a list of currently connected peers."""
+        return list(self.peers.values())
+        
     async def start(self):
         """Start the DHT network."""
         self.logger.info("Starting DHT network")

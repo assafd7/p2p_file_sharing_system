@@ -43,14 +43,15 @@ class PeerInfo:
     is_connected: bool = False
 
 class Peer:
-    def __init__(self, host: str, port: int, peer_id: str = None, is_local: bool = False):
+    def __init__(self, host: str, port: int, peer_id: str = None, is_local: bool = False, 
+                 reader: Optional[asyncio.StreamReader] = None, writer: Optional[asyncio.StreamWriter] = None):
         """Initialize a peer connection."""
         self.host = host
         self.port = port
         self.peer_id = peer_id or str(uuid.uuid4())
-        self.reader = None
-        self.writer = None
-        self.is_connected = False
+        self.reader = reader
+        self.writer = writer
+        self.is_connected = bool(reader and writer)  # Set connected if reader/writer provided
         self.is_disconnecting = False  # Add flag to track disconnection state
         self.is_local = is_local  # Add back is_local flag
         self.known_peers = set()  # Track known peers
