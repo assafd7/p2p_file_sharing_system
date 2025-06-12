@@ -49,6 +49,7 @@ class Peer:
         self.host = host
         self.port = port
         self.peer_id = peer_id or str(uuid.uuid4())
+        self.id = self.peer_id  # Add id property for compatibility
         self.reader = reader
         self.writer = writer
         self.is_connected = bool(reader and writer)  # Set connected if reader/writer provided
@@ -435,3 +436,31 @@ class Peer:
     def register_message_handler(self, msg_type: MessageType, handler: Callable[[Message], Awaitable[None]]):
         """Register a handler for a specific message type."""
         self.message_handlers[msg_type] = handler 
+
+    async def start(self):
+        """Start the peer connection and message processing."""
+        if self.is_connected:
+            return True
+
+        try:
+            # If we have reader/writer, we're already connected
+            if self.reader and self.writer:
+                self.is_connected = True
+            else:
+                # Otherwise, establish connection
+                success = await self.connect()
+                if not success:
+                    return False
+
+            # Start message processing
+            self.processing_task = asyncio.create_task(self._process_messages())
+            
+            # Start heartbeat if not local
+            if not self.is_local:
+                self.heartbeat_task = asyncio.create_task(self._heartbeat())
+                
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error starting peer: {e}")
+            return False 
