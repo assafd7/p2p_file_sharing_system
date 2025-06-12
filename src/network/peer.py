@@ -39,6 +39,7 @@ class Peer:
         self.is_connected = False
         self.is_local = is_local
         self.message_handlers: Dict[MessageType, Callable[[Message], Awaitable[None]]] = {}
+        self.known_peers: Set[PeerInfo] = set()
         self.logger = logging.getLogger(f"Peer-{self.peer_id[:8]}")
 
     def _generate_peer_id(self) -> str:
@@ -320,3 +321,15 @@ class Peer:
         except Exception as e:
             self.logger.error(f"Error sending ping: {e}")
             return False 
+
+    def get_known_peers(self) -> Set[PeerInfo]:
+        """Get the set of peers known to this peer."""
+        return self.known_peers
+
+    def add_known_peer(self, peer_info: PeerInfo):
+        """Add a peer to the known peers set."""
+        self.known_peers.add(peer_info)
+
+    def remove_known_peer(self, peer_id: str):
+        """Remove a peer from the known peers set."""
+        self.known_peers = {p for p in self.known_peers if p.id != peer_id} 
