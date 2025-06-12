@@ -193,41 +193,36 @@ class Peer:
             return False
             
         try:
-            data = message.serialize()
-            if not data:
-                self.logger.error("Failed to serialize message")
+            # Serialize message
+            try:
+                data = message.serialize()
+                if not data:
+                    self.logger.error("Failed to serialize message")
+                    return False
+            except Exception as e:
+                self.logger.error(f"Error serializing message: {e}")
                 return False
                 
+            # Send data in chunks
             total_sent = 0
             while total_sent < len(data):
                 try:
-                    # Ensure writer is still valid
+                    # Check writer state before each write
                     if not self.writer or self.writer.is_closing():
                         self.logger.error("Writer became invalid during send")
                         return False
                         
-                    sent = await asyncio.wait_for(
-                        self.writer.write(data[total_sent:]),
-                        timeout=WRITE_TIMEOUT
-                    )
-                    
-                    if sent == 0:
-                        self.logger.error("Connection closed while sending message")
-                        await self.disconnect(send_goodbye=False)
-                        return False
-                        
-                    total_sent += sent
+                    # Write chunk
+                    chunk = data[total_sent:total_sent + CHUNK_SIZE]
+                    self.writer.write(chunk)
+                    total_sent += len(chunk)
                     self.logger.debug(f"Sent {total_sent}/{len(data)} bytes")
                     
-                except asyncio.TimeoutError:
-                    self.logger.error("Timeout sending message")
-                    await self.disconnect(send_goodbye=False)
-                    return False
                 except Exception as e:
-                    self.logger.error(f"Error during send: {e}")
-                    await self.disconnect(send_goodbye=False)
+                    self.logger.error(f"Error writing chunk: {e}")
                     return False
                     
+            # Drain writer
             try:
                 await asyncio.wait_for(
                     self.writer.drain(),
@@ -236,16 +231,13 @@ class Peer:
                 return True
             except asyncio.TimeoutError:
                 self.logger.error("Timeout draining writer")
-                await self.disconnect(send_goodbye=False)
                 return False
             except Exception as e:
                 self.logger.error(f"Error draining writer: {e}")
-                await self.disconnect(send_goodbye=False)
                 return False
                 
         except Exception as e:
             self.logger.error(f"Error sending message: {e}")
-            await self.disconnect(send_goodbye=False)
             return False
 
     async def receive_message(self) -> Optional[Message]:
@@ -472,6 +464,11 @@ class Peer:
         try:
             while self.is_connected and not self.is_disconnecting:
                 try:
+                    # Check connection state
+                    if not self.is_connected or not self.writer or self.writer.is_closing():
+                        self.logger.debug("Connection no longer valid for heartbeat")
+                        break
+                        
                     # Send heartbeat message
                     heartbeat_msg = Message(
                         type=MessageType.HEARTBEAT,
