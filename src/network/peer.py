@@ -119,54 +119,37 @@ class Peer:
                 
         return False
 
-    async def disconnect(self, send_goodbye: bool = True) -> None:
+    async def disconnect(self, send_goodbye: bool = True):
         """Disconnect from the peer."""
-        if self.is_disconnecting:  # Prevent recursive disconnects
+        if self.is_disconnecting:
             return
             
         self.is_disconnecting = True
         self.is_connected = False
         
         try:
-            # Cancel heartbeat task if it exists
-            if self.heartbeat_task:
-                self.heartbeat_task.cancel()
-                try:
-                    await self.heartbeat_task
-                except asyncio.CancelledError:
-                    pass
-                self.heartbeat_task = None
-                
-            # Cancel message processing task if it exists
-            if self.processing_task:
-                self.processing_task.cancel()
-                try:
-                    await self.processing_task
-                except asyncio.CancelledError:
-                    pass
-                self.processing_task = None
-                
-            # Send goodbye message if requested and still connected
             if send_goodbye and self.writer and not self.writer.is_closing():
                 try:
+                    # Create goodbye message with correct parameter name
                     goodbye_msg = Message(
-                        msg_type=MessageType.GOODBYE,
+                        type=MessageType.GOODBYE,
                         sender_id=self.peer_id,
-                        data={"reason": "normal_disconnect"}
+                        payload={'reason': 'disconnecting'}
                     )
                     await self.send_message(goodbye_msg)
                 except Exception as e:
                     self.logger.debug(f"Error sending goodbye message: {e}")
                     
-            # Close writer if it exists
             if self.writer:
+                self.writer.close()
                 try:
-                    self.writer.close()
                     await self.writer.wait_closed()
                 except Exception as e:
-                    self.logger.debug(f"Error closing writer: {e}")
+                    self.logger.debug(f"Error waiting for writer to close: {e}")
                     
-            self.reader = None
+            if self.reader:
+                self.reader = None
+                
             self.writer = None
             self.logger.info("Disconnected from peer")
             
