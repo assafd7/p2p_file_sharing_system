@@ -536,13 +536,20 @@ class MainWindow(QMainWindow):
             self.transfer_list.addItem(item)
 
     def update_peer_list(self):
-        """Update the peer list display."""
-        self.peer_list.clear()
-        peers = self.network_manager.get_connected_peers()
-        for peer_info in peers:
-            item = QListWidgetItem(f"{peer_info.address}:{peer_info.port}")
-            item.setData(Qt.ItemDataRole.UserRole, peer_info)
-            self.peer_list.addItem(item)
+        """Update the peer list in the UI."""
+        try:
+            self.peer_list.clear()
+            peers = self.network_manager.get_connected_peers()
+            for peer in peers:
+                item = QTreeWidgetItem([
+                    peer.id[:8],  # Short ID
+                    peer.address,
+                    str(peer.port),
+                    "Connected" if peer.is_connected else "Disconnected"
+                ])
+                self.peer_list.addTopLevelItem(item)
+        except Exception as e:
+            self.logger.error(f"Error updating peer list: {e}")
 
     def cleanup(self):
         """Clean up resources before closing."""
