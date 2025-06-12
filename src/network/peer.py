@@ -428,3 +428,74 @@ class Peer:
     def remove_known_peer(self, peer_id: str):
         """Remove a peer from the known peers set."""
         self.known_peers = {p for p in self.known_peers if p.id != peer_id} 
+
+    async def _process_messages(self):
+        """Process incoming messages from the peer."""
+        try:
+            while self.is_connected and self.reader and not self.reader.at_eof():
+                try:
+                    message = await self.receive_message()
+                    if message:
+                        # Update last activity time
+                        self.last_activity = time.time()
+                        
+                        # Handle message based on type
+                        if message.msg_type in self.message_handlers:
+                            try:
+                                await self.message_handlers[message.msg_type](message)
+                            except Exception as e:
+                                self.logger.error(f"Error handling message {message.msg_type}: {e}")
+                        else:
+                            self.logger.warning(f"No handler for message type: {message.msg_type}")
+                            
+                except MessageSizeError as e:
+                    self.logger.error(f"Message size error: {e}")
+                    await self.disconnect(send_goodbye=False)
+                    break
+                except InvalidMessageError as e:
+                    self.logger.error(f"Invalid message: {e}")
+                    await self.disconnect(send_goodbye=False)
+                    break
+                except Exception as e:
+                    self.logger.error(f"Error processing message: {e}")
+                    await self.disconnect(send_goodbye=False)
+                    break
+                    
+        except Exception as e:
+            self.logger.error(f"Error in message processing loop: {e}")
+        finally:
+            if self.is_connected:
+                await self.disconnect(send_goodbye=False)
+
+    async def _heartbeat(self):
+        """Send periodic heartbeat messages to keep the connection alive."""
+        try:
+            while self.is_connected and not self.is_disconnecting:
+                try:
+                    # Send heartbeat message
+                    heartbeat_msg = Message(
+                        msg_type=MessageType.HEARTBEAT,
+                        sender_id=self.peer_id,
+                        data={"timestamp": time.time()}
+                    )
+                    
+                    if not await self.send_message(heartbeat_msg):
+                        self.logger.error("Failed to send heartbeat")
+                        break
+                        
+                    # Wait for next heartbeat
+                    await asyncio.sleep(self.heartbeat_interval)
+                    
+                except Exception as e:
+                    self.logger.error(f"Error sending heartbeat: {e}")
+                    break
+                    
+        except Exception as e:
+            self.logger.error(f"Error in heartbeat loop: {e}")
+        finally:
+            if self.is_connected:
+                await self.disconnect(send_goodbye=False)
+
+    def register_message_handler(self, msg_type: MessageType, handler: Callable[[Message], Awaitable[None]]):
+        """Register a handler for a specific message type."""
+        self.message_handlers[msg_type] = handler 
