@@ -228,27 +228,27 @@ class DatabaseManager:
             address, port = peer_id.split(':')
             port = int(port)
             
-            async with self.get_connection() as conn:
+            with self.get_connection() as conn:
                 # First check if peer exists
-                cursor = await conn.execute(
+                cursor = conn.execute(
                     "SELECT id FROM peers WHERE id = ?",
                     (peer_id,)
                 )
-                peer = await cursor.fetchone()
+                peer = cursor.fetchone()
                 
                 if peer:
                     # Update existing peer
-                    await conn.execute(
+                    conn.execute(
                         "UPDATE peers SET username = ? WHERE id = ?",
                         (username, peer_id)
                     )
                 else:
                     # Insert new peer
-                    await conn.execute(
+                    conn.execute(
                         "INSERT INTO peers (id, address, port, username) VALUES (?, ?, ?, ?)",
                         (peer_id, address, port, username)
                     )
-                await conn.commit()
+                conn.commit()
                 self.logger.info(f"Updated username for peer {peer_id} to {username}")
         except Exception as e:
             self.logger.error(f"Error updating peer username: {e}")
