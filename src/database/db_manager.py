@@ -22,22 +22,37 @@ class DatabaseManager:
         try:
             # Check if database exists and has correct schema
             db_exists = os.path.exists(self.db_path)
+            needs_recreation = False
+            
             if db_exists:
                 # Check if schema needs update
-                with self.get_connection() as conn:
-                    cursor = conn.execute("PRAGMA table_info(peers)")
-                    columns = {row[1] for row in cursor.fetchall()}
-                    if 'username' not in columns:
-                        self.logger.info("Database schema needs update. Recreating database...")
-                        conn.close()
-                        os.remove(self.db_path)
-                        db_exists = False
+                try:
+                    with self.get_connection() as conn:
+                        cursor = conn.execute("PRAGMA table_info(peers)")
+                        columns = {row[1] for row in cursor.fetchall()}
+                        if 'username' not in columns:
+                            self.logger.info("Database schema needs update. Recreating database...")
+                            needs_recreation = True
+                except Exception as e:
+                    self.logger.warning(f"Error checking database schema: {e}")
+                    needs_recreation = True
             
-            # Create new database if needed
-            if not db_exists:
-                self.logger.info("Creating new database with updated schema...")
+            # Recreate database if needed
+            if needs_recreation:
+                try:
+                    if os.path.exists(self.db_path):
+                        os.remove(self.db_path)
+                    self.logger.info("Creating new database with updated schema...")
+                    self._create_tables()
+                    self.logger.info("Database initialized successfully")
+                except Exception as e:
+                    self.logger.error(f"Error recreating database: {e}")
+                    raise
+            elif not db_exists:
+                self.logger.info("Creating new database...")
                 self._create_tables()
                 self.logger.info("Database initialized successfully")
+                
         except Exception as e:
             self.logger.error(f"Error initializing database: {e}")
             raise
