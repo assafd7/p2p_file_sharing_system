@@ -103,11 +103,12 @@ class P2PFileSharingApp:
             local_ip = self.get_local_ip()
             self.logger.info(f"Local IP address: {local_ip}")
             
-            # Initialize DHT
+            # Initialize DHT with temporary username
             self.dht = DHT(
                 host=local_ip,
                 port=DEFAULT_PORT,
-                bootstrap_nodes=BOOTSTRAP_NODES
+                bootstrap_nodes=BOOTSTRAP_NODES,
+                username="Anonymous"  # Will be updated after authentication
             )
             self.logger.debug("DHT initialized")
         except Exception as e:
@@ -174,6 +175,9 @@ class P2PFileSharingApp:
         """Handle successful authentication."""
         try:
             self.logger.info(f"User authenticated: {username} ({user_id})")
+            
+            # Update DHT username
+            self.dht.username = username
             
             # Create main window
             self.main_window = MainWindow(

@@ -46,17 +46,19 @@ class MainWindow(QMainWindow):
     
     def __init__(self, file_manager: FileManager, network_manager: DHT,
                  db_manager: DatabaseManager, user_id: str, username: str):
+        """Initialize the main window."""
         super().__init__()
         self.file_manager = file_manager
         self.network_manager = network_manager
         self.db_manager = db_manager
         self.user_id = user_id
         self.username = username
-        self.logger = logging.getLogger("MainWindow")
+        self.logger = logging.getLogger(__name__)
         self.transfer_workers: Dict[str, TransferWorker] = {}
 
-        self.setWindowTitle(f"P2P File Sharing - {username}")
-        self.setMinimumSize(800, 600)
+        # Set window properties
+        self.setWindowTitle("P2P File Sharing System")
+        self.setGeometry(100, 100, 800, 600)
 
         # Create central widget and main layout
         central_widget = QWidget()
@@ -80,11 +82,11 @@ class MainWindow(QMainWindow):
         self.tab_widget = QTabWidget()
         main_layout.addWidget(self.tab_widget)
 
-        # Create tabs
-        self.setup_files_tab()
-        self.setup_transfers_tab()
-        self.setup_peers_tab()
-        self.setup_settings_tab()
+        # Setup tabs
+        self.tab_widget.addTab(self.setup_files_tab(), "Files")
+        self.tab_widget.addTab(self.setup_transfers_tab(), "Transfers")
+        self.tab_widget.addTab(self.setup_peers_tab(), "Peers")
+        self.tab_widget.addTab(self.setup_settings_tab(), "Settings")
 
         # Create status bar
         self.statusBar().showMessage("Ready")
@@ -96,6 +98,9 @@ class MainWindow(QMainWindow):
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.update_ui)
         self.update_timer.start(1000)  # Update every second
+
+        # Initial UI update
+        self.update_ui()
 
     def setup_files_tab(self):
         """Setup the files tab with file list and controls."""
@@ -127,7 +132,7 @@ class MainWindow(QMainWindow):
         self.delete_button = QPushButton("Delete")
         self.delete_button.clicked.connect(self.delete_file)
         layout.addLayout(controls_layout)
-        self.tab_widget.addTab(files_tab, "Files")
+        return files_tab
 
     def setup_transfers_tab(self):
         """Setup the transfers tab with transfer list and progress bars."""
@@ -151,7 +156,7 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.cancel_button)
 
         layout.addLayout(controls_layout)
-        self.tab_widget.addTab(transfers_tab, "Transfers")
+        return transfers_tab
 
     def setup_peers_tab(self):
         """Set up the peers tab."""
@@ -184,7 +189,7 @@ class MainWindow(QMainWindow):
         
         layout.addLayout(button_layout)
         peers_tab.setLayout(layout)
-        self.tab_widget.addTab(peers_tab, "Peers")
+        return peers_tab
 
     def setup_settings_tab(self):
         """Setup the settings tab with configuration options."""
@@ -221,7 +226,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(storage_group)
         layout.addStretch()
 
-        self.tab_widget.addTab(settings_tab, "Settings")
+        return settings_tab
 
     def setup_menu_bar(self):
         """Setup the menu bar with actions."""
@@ -502,7 +507,7 @@ class MainWindow(QMainWindow):
         self.update_transfer_list()
         
         # Update peer list
-        self.update_peer_list()
+        loop.create_task(self.update_peer_list())
 
     async def update_file_list(self):
         """Update the file list display."""
@@ -547,14 +552,14 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, transfer_info)
             self.transfer_list.addItem(item)
 
-    def update_peer_list(self):
+    async def update_peer_list(self):
         """Update the peer list in the UI."""
         try:
             self.peer_list.clear()
             peers = self.network_manager.get_connected_peers()
             for peer in peers:
                 # Get username from database
-                peer_info = self.db_manager.get_peer(peer.id)
+                peer_info = await self.db_manager.get_peer(peer.id)
                 username = peer_info.get('username', 'Unknown') if peer_info else 'Unknown'
                 
                 item = QTreeWidgetItem([

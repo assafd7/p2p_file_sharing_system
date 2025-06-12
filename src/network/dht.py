@@ -50,9 +50,10 @@ class KBucket:
 class DHT:
     """Distributed Hash Table for peer discovery and routing."""
     
-    def __init__(self, host: str, port: int, bootstrap_nodes: List[Tuple[str, int]] = None):
+    def __init__(self, host: str, port: int, username: str, bootstrap_nodes: List[Tuple[str, int]] = None):
         self.host = host
         self.port = port
+        self.username = username
         self.bootstrap_nodes = bootstrap_nodes or []
         self.peers: Dict[str, Peer] = {}
         self.logger = logging.getLogger(__name__)
