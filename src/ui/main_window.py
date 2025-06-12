@@ -344,22 +344,25 @@ class MainWindow(QMainWindow):
             item: Optional QTreeWidgetItem to delete. If None, uses the currently selected item.
             file_info: Optional FileMetadata object. If provided, uses this instead of getting from item.
         """
+        # If file_info is not provided, get it from the selected item
         if file_info is None:
             selected_items = [item] if item else self.file_list.selectedItems()
-        if not selected_items:
-            self.show_warning("Please select a file to delete")
-            return
+            if not selected_items:
+                self.show_warning("Please select a file to delete")
+                return
             file_info = selected_items[0].data(0, Qt.ItemDataRole.UserRole)
             if not file_info:
                 self.show_error("Could not get file information")
                 return
 
+        # Confirm deletion with user
         reply = QMessageBox.question(
             self,
             "Confirm Deletion",
             f"Are you sure you want to delete {file_info.name}?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
+        
         if reply == QMessageBox.StandardButton.Yes:
             try:
                 self.file_manager.delete_file(file_info.hash, self.user_id)
