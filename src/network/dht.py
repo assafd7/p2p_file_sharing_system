@@ -288,29 +288,42 @@ class DHT:
     async def broadcast_peer_list(self):
         """Broadcast the current peer list to all connected peers."""
         try:
-            # Only include essential peer information
-            peers = [
-                {
+            # Only include essential peer information and limit the number of peers
+            peers = []
+            for p in self.get_connected_peers():
+                if len(peers) >= 100:  # Limit to 100 peers to prevent message size issues
+                    break
+                peers.append({
                     "id": p.id,
                     "address": p.address,
-                    "port": p.port,
-                    "is_connected": p.is_connected
-                }
-                for p in self.get_connected_peers()
-            ]
+                    "port": p.port
+                })
             
-            peer_list_msg = Message.create(
-                MessageType.PEER_LIST,
-                self.node_id,
-                {"peers": peers}
-            )
-            
-            for peer in self.peers.values():
-                if peer.is_connected:
-                    try:
-                        await peer.send_message(peer_list_msg)
-                    except Exception as e:
-                        self.logger.error(f"Error broadcasting peer list to {peer.peer_id}: {e}")
+            try:
+                peer_list_msg = Message.create(
+                    MessageType.PEER_LIST,
+                    self.node_id,
+                    {"peers": peers}
+                )
+                
+                for peer in self.peers.values():
+                    if peer.is_connected:
+                        try:
+                            await peer.send_message(peer_list_msg)
+                        except MessageSizeError as e:
+                            self.logger.warning(f"Peer list too large for {peer.peer_id}, reducing size")
+                            # Try with fewer peers
+                            peers = peers[:50]  # Reduce to 50 peers
+                            peer_list_msg = Message.create(
+                                MessageType.PEER_LIST,
+                                self.node_id,
+                                {"peers": peers}
+                            )
+                            await peer.send_message(peer_list_msg)
+                        except Exception as e:
+                            self.logger.error(f"Error broadcasting peer list to {peer.peer_id}: {e}")
+            except MessageSizeError as e:
+                self.logger.error(f"Peer list message too large even after optimization: {e}")
         except Exception as e:
             self.logger.error(f"Error broadcasting peer list: {e}")
 
@@ -320,17 +333,23 @@ class DHT:
             peers = message.data.get("peers", [])
             for peer_info in peers:
                 if peer_info["id"] != self.node_id:  # Don't add ourselves
+                    # Check if we already know this peer
+                    if peer_info["id"] in self.peers:
+                        continue
+                        
                     peer = Peer(
                         peer_info["address"],
                         peer_info["port"],
                         peer_info["id"],
                         is_local=False
                     )
-                    if peer.peer_id not in self.peers:
+                    try:
                         if await peer.connect():
                             self.peers[peer.peer_id] = peer
                             # Register message handlers
                             peer.register_handler(MessageType.PEER_LIST, self.handle_peer_list)
+                    except Exception as e:
+                        self.logger.error(f"Error connecting to peer {peer_info['id']}: {e}")
         except Exception as e:
             self.logger.error(f"Error handling peer list: {e}")
 

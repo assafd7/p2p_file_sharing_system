@@ -38,9 +38,9 @@ class Message:
         json_data = json.dumps(data).encode('utf-8')
         length = len(json_data)
         
-        # Ensure message size doesn't exceed 1MB
-        if length > 1024 * 1024:
-            raise ValueError("Message size exceeds 1MB limit")
+        # Check message size
+        if length > MAX_MESSAGE_SIZE:
+            raise MessageSizeError(f"Message size ({length} bytes) exceeds limit of {MAX_MESSAGE_SIZE} bytes")
             
         # Pack length as 4-byte big-endian integer
         length_prefix = struct.pack('>I', length)
@@ -50,12 +50,12 @@ class Message:
     def deserialize(cls, data: bytes) -> 'Message':
         """Deserialize bytes to Message object."""
         if len(data) < 4:
-            raise ValueError("Message too short")
+            raise InvalidMessageError("Message too short")
             
         # Unpack length prefix
         length = struct.unpack('>I', data[:4])[0]
-        if length > 1024 * 1024:
-            raise ValueError("Message size exceeds 1MB limit")
+        if length > MAX_MESSAGE_SIZE:
+            raise MessageSizeError(f"Message size ({length} bytes) exceeds limit of {MAX_MESSAGE_SIZE} bytes")
             
         json_data = data[4:4+length].decode('utf-8')
         data_dict = json.loads(json_data)
@@ -80,7 +80,7 @@ class InvalidMessageError(ProtocolError):
     pass
 
 # Constants
-MAX_MESSAGE_SIZE = 1024 * 1024  # 1MB
+MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10MB
 CHUNK_SIZE = 4096  # 4KB
 CONNECTION_TIMEOUT = 30  # seconds
 READ_TIMEOUT = 10  # seconds
