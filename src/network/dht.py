@@ -6,7 +6,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import logging
 from .protocol import Message, MessageType
-from peer import Peer, PeerInfo
+from .peer import Peer, PeerInfo
+
+class DHTError(Exception):
+    """Base exception class for DHT-related errors."""
+    pass
 
 @dataclass
 class KBucket:

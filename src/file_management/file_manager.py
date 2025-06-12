@@ -68,44 +68,53 @@ class FileManager:
             FileMetadata object if successful, None otherwise
         """
         try:
-            self.logger.debug(f"[DEBUG] Starting file addition process for: {file_path}")
-            
-            # 1. File Verification Stage
-            try:
-                self.logger.debug("[DEBUG] Verifying file")
-                if not os.path.exists(file_path):
-                    self.logger.error("[ERROR] File does not exist")
-                    raise FileManagerError("File does not exist")
-                if not os.access(file_path, os.R_OK):
-                    self.logger.error("[ERROR] File is not readable")
-                    raise FileManagerError("File is not readable")
-                self.logger.debug("[DEBUG] File verification passed")
-            except Exception as e:
-                self.logger.error(f"[ERROR] File verification failed: {str(e)}")
-                raise FileManagerError(f"File verification failed: {str(e)}")
+            # 1. Validation Stage
+            self.logger.debug(f"[DEBUG] Starting file addition: {file_path}")
+            path = Path(file_path)
+            if not path.exists():
+                self.logger.error("[ERROR] File does not exist")
+                raise FileManagerError("File does not exist")
+            if not path.is_file():
+                self.logger.error("[ERROR] Path is not a file")
+                raise FileManagerError("Path is not a file")
+            if not os.access(file_path, os.R_OK):
+                self.logger.error("[ERROR] File is not readable")
+                raise FileManagerError("File is not readable")
             
             # 2. Metadata Creation Stage
-            try:
-                self.logger.debug("[DEBUG] Creating file metadata")
-                metadata = asyncio.get_event_loop().run_until_complete(
-                    self.create_file_metadata(file_path, owner_id)
-                )
-                if not metadata:
-                    self.logger.error("[ERROR] Failed to create metadata")
-                    raise FileManagerError("Failed to create metadata")
-                self.logger.debug(f"[DEBUG] Metadata created: {metadata}")
-            except Exception as e:
-                self.logger.error(f"[ERROR] Metadata creation failed: {str(e)}")
-                raise FileManagerError(f"Metadata creation failed: {str(e)}")
+            self.logger.debug("[DEBUG] Creating metadata")
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If we're in an async context, create a new event loop
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    metadata = new_loop.run_until_complete(self.create_file_metadata(file_path, owner_id))
+                finally:
+                    new_loop.close()
+            else:
+                metadata = loop.run_until_complete(self.create_file_metadata(file_path, owner_id))
+            
+            if not metadata:
+                self.logger.error("[ERROR] Failed to create metadata")
+                raise FileManagerError("Failed to create metadata")
             
             # 3. Storage Stage
             try:
                 self.logger.debug("[DEBUG] Saving metadata")
-                if not asyncio.get_event_loop().run_until_complete(
-                    self.save_file_metadata(metadata)
-                ):
-                    self.logger.error("[ERROR] Failed to save metadata")
-                    raise FileManagerError("Failed to save metadata")
+                if loop.is_running():
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
+                    try:
+                        if not new_loop.run_until_complete(self.save_file_metadata(metadata)):
+                            self.logger.error("[ERROR] Failed to save metadata")
+                            raise FileManagerError("Failed to save metadata")
+                    finally:
+                        new_loop.close()
+                else:
+                    if not loop.run_until_complete(self.save_file_metadata(metadata)):
+                        self.logger.error("[ERROR] Failed to save metadata")
+                        raise FileManagerError("Failed to save metadata")
                 
                 self.logger.debug("[DEBUG] Copying file to storage")
                 target_path = self._get_file_path(metadata.hash) / metadata.name
@@ -118,9 +127,7 @@ class FileManager:
             # 4. Final Verification Stage
             try:
                 self.logger.debug("[DEBUG] Performing final verification")
-                shared_files = asyncio.get_event_loop().run_until_complete(
-                    self.get_shared_files_async()
-                )
+                shared_files = self.get_shared_files()
                 if not any(f.hash == metadata.hash for f in shared_files):
                     self.logger.error("[ERROR] File not found in shared files after addition")
                     raise FileManagerError("File not found in shared files after addition")
@@ -249,9 +256,17 @@ class FileManager:
             List of FileMetadata objects
         """
         try:
-            return asyncio.get_event_loop().run_until_complete(
-                self.get_shared_files_async()
-            )
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If we're in an async context, create a new event loop
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    return new_loop.run_until_complete(self.get_shared_files_async())
+                finally:
+                    new_loop.close()
+            else:
+                return loop.run_until_complete(self.get_shared_files_async())
         except Exception as e:
             self.logger.error(f"Error getting shared files: {e}")
             return []
