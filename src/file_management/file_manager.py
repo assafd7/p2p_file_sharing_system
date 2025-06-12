@@ -293,104 +293,91 @@ class FileManager:
 
     async def create_file_metadata(self, file_path: str, owner_id: str) -> FileMetadata:
         """Create metadata for a file."""
+        path = None
+        stats = None
+        created_at = None
+        modified_at = None
+        chunks = []
+        final_hash = None
+        
         try:
             self.logger.debug(f"[DEBUG] Starting metadata creation for file: {file_path}")
             path = Path(file_path)
 
             # 1. File Stats Stage
-            try:
-                self.logger.debug("[DEBUG] Getting file stats")
-                stats = path.stat()
-                if stats.st_size == 0:
-                    self.logger.error("[ERROR] File is empty")
-                    raise FileManagerError("File is empty")
-                if stats.st_size > 1024 * 1024 * 1024:  # 1GB limit
-                    self.logger.error("[ERROR] File too large")
-                    raise FileManagerError("File is too large (max 1GB)")
-                self.logger.debug(f"[DEBUG] File stats: size={stats.st_size}, created={stats.st_ctime}, modified={stats.st_mtime}")
-            except Exception as e:
-                self.logger.error(f"[ERROR] Failed to get file stats: {str(e)}")
-                raise FileManagerError(f"Failed to get file stats: {str(e)}")
+            self.logger.debug("[DEBUG] Getting file stats")
+            stats = path.stat()
+            if stats.st_size == 0:
+                self.logger.error("[ERROR] File is empty")
+                raise FileManagerError("File is empty")
+            if stats.st_size > 1024 * 1024 * 1024:  # 1GB limit
+                self.logger.error("[ERROR] File too large")
+                raise FileManagerError("File is too large (max 1GB)")
+            self.logger.debug(f"[DEBUG] File stats: size={stats.st_size}, created={stats.st_ctime}, modified={stats.st_mtime}")
 
             # 2. Timestamp Stage
-            try:
-                self.logger.debug("[DEBUG] Processing timestamps")
-                created_at = datetime.fromtimestamp(stats.st_ctime)
-                modified_at = datetime.fromtimestamp(stats.st_mtime)
-                if created_at > datetime.now() or modified_at > datetime.now():
-                    self.logger.error("[ERROR] Invalid timestamps")
-                    raise FileManagerError("Invalid file timestamps")
-                self.logger.debug(f"[DEBUG] Timestamps processed: created={created_at}, modified={modified_at}")
-            except Exception as e:
-                self.logger.error(f"[ERROR] Failed to process timestamps: {str(e)}")
-                raise FileManagerError(f"Failed to process timestamps: {str(e)}")
+            self.logger.debug("[DEBUG] Processing timestamps")
+            created_at = datetime.fromtimestamp(stats.st_ctime)
+            modified_at = datetime.fromtimestamp(stats.st_mtime)
+            if created_at > datetime.now() or modified_at > datetime.now():
+                self.logger.error("[ERROR] Invalid timestamps")
+                raise FileManagerError("Invalid file timestamps")
+            self.logger.debug(f"[DEBUG] Timestamps processed: created={created_at}, modified={modified_at}")
 
             # 3. Chunk Creation Stage
-            chunks = []
             chunk_index = 0
             file_hash = hashlib.sha256()
-            try:
-                self.logger.debug("[DEBUG] Starting chunk creation")
-                with open(path, 'rb') as f:
-                    while True:
-                        chunk_data = f.read(self.CHUNK_SIZE)
-                        if not chunk_data:
-                            break
-                        if len(chunk_data) > self.CHUNK_SIZE:
-                            self.logger.error("[ERROR] Chunk size exceeds maximum")
-                            raise FileManagerError("Chunk size exceeds maximum")
-                        chunk_hash = hashlib.sha256(chunk_data).hexdigest()
-                        file_hash.update(chunk_data)
-                        chunk = FileChunk(
-                            index=chunk_index,
-                            hash=chunk_hash,
-                            size=len(chunk_data)
-                        )
-                        chunks.append(chunk)
-                        self.logger.debug(f"[DEBUG] Created chunk {chunk_index}: size={len(chunk_data)}, hash={chunk_hash}")
-                        chunk_index += 1
-            except Exception as e:
-                self.logger.error(f"[ERROR] Failed to create chunks: {str(e)}")
-                raise FileManagerError(f"Failed to create file chunks: {str(e)}")
+            self.logger.debug("[DEBUG] Starting chunk creation")
+            with open(path, 'rb') as f:
+                while True:
+                    chunk_data = f.read(self.CHUNK_SIZE)
+                    if not chunk_data:
+                        break
+                    if len(chunk_data) > self.CHUNK_SIZE:
+                        self.logger.error("[ERROR] Chunk size exceeds maximum")
+                        raise FileManagerError("Chunk size exceeds maximum")
+                    chunk_hash = hashlib.sha256(chunk_data).hexdigest()
+                    file_hash.update(chunk_data)
+                    chunk = FileChunk(
+                        index=chunk_index,
+                        hash=chunk_hash,
+                        size=len(chunk_data)
+                    )
+                    chunks.append(chunk)
+                    self.logger.debug(f"[DEBUG] Created chunk {chunk_index}: size={len(chunk_data)}, hash={chunk_hash}")
+                    chunk_index += 1
 
             if not chunks:
                 self.logger.error("[ERROR] No chunks created")
                 raise FileManagerError("No chunks were created")
 
             # 4. Hash Calculation Stage
-            try:
-                self.logger.debug("[DEBUG] Calculating final hash")
-                final_hash = file_hash.hexdigest()
-                if not final_hash:
-                    self.logger.error("[ERROR] Hash calculation failed")
-                    raise FileManagerError("Failed to calculate file hash")
-                self.logger.debug(f"[DEBUG] Calculated file hash: {final_hash}")
-            except Exception as e:
-                self.logger.error(f"[ERROR] Failed to calculate hash: {str(e)}")
-                raise FileManagerError(f"Failed to calculate file hash: {str(e)}")
+            self.logger.debug("[DEBUG] Calculating final hash")
+            final_hash = file_hash.hexdigest()
+            if not final_hash:
+                self.logger.error("[ERROR] Hash calculation failed")
+                raise FileManagerError("Failed to calculate file hash")
+            self.logger.debug(f"[DEBUG] Calculated file hash: {final_hash}")
 
             # 5. Metadata Object Creation Stage
-            try:
-                self.logger.debug("[DEBUG] Creating metadata object")
-                metadata = FileMetadata(
-                    name=path.name,
-                    size=stats.st_size,
-                    created_at=created_at,
-                    modified_at=modified_at,
-                    hash=final_hash,
-                    chunks=chunks,
-                    owner_id=owner_id,
-                    permissions={owner_id: ['read', 'write', 'share']}
-                )
-                # Verify metadata object
-                if not metadata.name or not metadata.hash or not metadata.chunks:
-                    self.logger.error("[ERROR] Invalid metadata object created")
-                    raise FileManagerError("Invalid metadata object created")
-                self.logger.debug(f"[DEBUG] Created metadata object: {metadata}")
-                return metadata
-            except Exception as e:
-                self.logger.error(f"[ERROR] Failed to create metadata object: {str(e)}")
-                raise FileManagerError(f"Failed to create metadata object: {str(e)}")
+            self.logger.debug("[DEBUG] Creating metadata object")
+            metadata = FileMetadata(
+                name=path.name,
+                size=stats.st_size,
+                created_at=created_at,
+                modified_at=modified_at,
+                hash=final_hash,
+                chunks=chunks,
+                owner_id=owner_id,
+                permissions={owner_id: ['read', 'write', 'share']}
+            )
+            # Verify metadata object
+            if not metadata.name or not metadata.hash or not metadata.chunks:
+                self.logger.error("[ERROR] Invalid metadata object created")
+                raise FileManagerError("Invalid metadata object created")
+            self.logger.debug(f"[DEBUG] Created metadata object: {metadata}")
+            return metadata
+
         except Exception as e:
             self.logger.error(f"[ERROR] Failed in create_file_metadata: {str(e)}")
             raise FileManagerError(f"Failed to create file metadata: {str(e)}")

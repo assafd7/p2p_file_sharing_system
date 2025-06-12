@@ -41,30 +41,6 @@ class TransferWorker(QThread):
     def stop(self):
         self.is_running = False
 
-class ConnectionWorker(QThread):
-    """Worker thread for peer connections."""
-    finished = pyqtSignal(bool, str, str)  # success, address, error_message
-
-    def __init__(self, network_manager, host: str, port: int):
-        super().__init__()
-        self.network_manager = network_manager
-        self.host = host
-        self.port = port
-
-    def run(self):
-        """Run the connection operation."""
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            success = loop.run_until_complete(self.network_manager.connect_to_peer(self.host, self.port))
-            loop.close()
-            if success:
-                self.finished.emit(True, f"{self.host}:{self.port}", None)
-            else:
-                self.finished.emit(False, f"{self.host}:{self.port}", "Connection failed")
-        except Exception as e:
-            self.finished.emit(False, f"{self.host}:{self.port}", str(e))
-
 class MainWindow(QMainWindow):
     """Main window of the P2P file sharing application."""
     
@@ -437,46 +413,40 @@ class MainWindow(QMainWindow):
                 self.show_error(f"Error cancelling transfer: {e}")
 
     def connect_to_peer(self):
-        """Connect to a peer."""
-        address, ok = QInputDialog.getText(
-            self,
-            "Connect to Peer",
-            "Enter peer address (host:port):"
-        )
-        if ok and address:
+        """Connect to a peer using the specified address."""
+        try:
+            # Get peer address from user
+            address, ok = QInputDialog.getText(
+                self, "Connect to Peer", "Enter peer address (host:port):"
+            )
+            
+            if not ok or not address:
+                return
+                
+            # Parse address
             try:
-                # Parse address
-                try:
-                    host, port_str = address.split(":")
-                    port = int(port_str)
-                except ValueError:
-                    self.show_error("Invalid address format. Please use host:port")
-                    return
-
-                # Validate port number
-                if port < 1 or port > 65535:
-                    self.show_error("Port must be between 1 and 65535")
-                    return
-
-                # Create and start connection worker
-                self.connection_worker = ConnectionWorker(self.network_manager, host, port)
-                self.connection_worker.finished.connect(self._on_connection_result)
-                self.connection_worker.start()
+                host, port_str = address.split(":")
+                port = int(port_str)
+            except ValueError:
+                self.show_error("Invalid address format. Please use host:port")
+                return
                 
-                # Show connecting message
-                self.statusBar().showMessage(f"Connecting to {address}...")
-                
-            except Exception as e:
-                self.show_error(f"Error connecting to peer: {e}")
-
-    def _on_connection_result(self, success: bool, address: str, error: str = None):
-        """Handle connection result."""
-        if success:
-            self.show_info(f"Connected to peer: {address}")
-            self.update_peer_list()
-        else:
-            self.show_error(f"Failed to connect to {address}: {error}")
-        self.statusBar().showMessage("Ready")
+            # Attempt connection
+            async def connect():
+                success = await self.network_manager.connect_to_peer(host, port)
+                if success:
+                    self.show_info(f"Successfully connected to {address}")
+                    self.update_peer_list()  # Refresh peer list
+                else:
+                    self.show_error(f"Failed to connect to {address}")
+            
+            # Run connection in event loop
+            loop = asyncio.get_event_loop()
+            loop.create_task(connect())
+            
+        except Exception as e:
+            self.logger.error(f"Error connecting to peer: {e}")
+            self.show_error(f"Error connecting to peer: {str(e)}")
 
     def disconnect_from_peer(self):
         """Disconnect from a selected peer."""

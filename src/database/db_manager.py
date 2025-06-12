@@ -297,14 +297,4 @@ class DatabaseManager:
                 ORDER BY last_seen DESC
             ''') as cursor:
                 rows = await cursor.fetchall()
-                return [dict(row) for row in rows]
-
-    async def close(self):
-        """Close the database connection."""
-        try:
-            # Since we're using aiosqlite with context managers, we don't need to explicitly close connections
-            # But we can add any cleanup logic here if needed
-            self.logger.info("Database manager closed")
-        except Exception as e:
-            self.logger.error(f"Error closing database manager: {e}")
-            raise 
+                return [dict(row) for row in rows] 
