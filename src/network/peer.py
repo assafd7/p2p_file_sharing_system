@@ -19,6 +19,8 @@ from .protocol import (
     MessageSizeError,
     InvalidMessageError
 )
+import uuid
+import time
 
 @dataclass
 class PeerInfo:
@@ -30,17 +32,31 @@ class PeerInfo:
     is_connected: bool = False
 
 class Peer:
-    def __init__(self, host: str, port: int, peer_id: Optional[str] = None, is_local: bool = False):
+    def __init__(self, host: str, port: int, peer_id: str = None):
+        """Initialize a peer connection."""
         self.host = host
         self.port = port
-        self.peer_id = peer_id or self._generate_peer_id()
-        self.reader: Optional[asyncio.StreamReader] = None
-        self.writer: Optional[asyncio.StreamWriter] = None
+        self.peer_id = peer_id or str(uuid.uuid4())
+        self.reader = None
+        self.writer = None
         self.is_connected = False
-        self.is_local = is_local
+        self.is_disconnecting = False  # Add flag to track disconnection state
+        self.known_peers = set()  # Track known peers
+        self.logger = logging.getLogger(f"Peer-{self.peer_id}")
+        self.last_activity = time.time()
+        self.retry_count = 0
+        self.retry_delay = INITIAL_RETRY_DELAY
+        self.max_retries = MAX_RETRIES
+        self.connection_timeout = CONNECTION_TIMEOUT
+        self.read_timeout = READ_TIMEOUT
+        self.write_timeout = WRITE_TIMEOUT
+        self.heartbeat_interval = HEARTBEAT_INTERVAL
+        self.heartbeat_timeout = HEARTBEAT_TIMEOUT
+        self.heartbeat_task = None
+        self.message_queue = asyncio.Queue()
+        self.processing_task = None
+        self._lock = asyncio.Lock()
         self.message_handlers: Dict[MessageType, Callable[[Message], Awaitable[None]]] = {}
-        self.known_peers: Set[PeerInfo] = set()
-        self.logger = logging.getLogger(f"Peer-{self.peer_id[:8]}")
 
     def _generate_peer_id(self) -> str:
         """Generate a unique peer ID based on host and port."""
@@ -137,32 +153,66 @@ class Peer:
 
         return False
 
-    async def disconnect(self):
-        """Gracefully disconnect from the peer."""
-        if self.is_connected:
-            try:
-                goodbye_msg = Message.create(
-                    MessageType.GOODBYE,
-                    self.peer_id,
-                    {"reason": "graceful_shutdown"}
-                )
-                await self.send_message(goodbye_msg)
-            except Exception as e:
-                self.logger.error(f"Error sending goodbye message: {e}")
+    async def disconnect(self, send_goodbye: bool = True) -> None:
+        """Disconnect from the peer."""
+        if self.is_disconnecting:  # Prevent recursive disconnects
+            return
             
+        self.is_disconnecting = True
+        self.is_connected = False
+        
+        try:
+            # Cancel heartbeat task if it exists
+            if self.heartbeat_task:
+                self.heartbeat_task.cancel()
+                try:
+                    await self.heartbeat_task
+                except asyncio.CancelledError:
+                    pass
+                self.heartbeat_task = None
+                
+            # Cancel message processing task if it exists
+            if self.processing_task:
+                self.processing_task.cancel()
+                try:
+                    await self.processing_task
+                except asyncio.CancelledError:
+                    pass
+                self.processing_task = None
+                
+            # Send goodbye message if requested and still connected
+            if send_goodbye and self.writer and not self.writer.is_closing():
+                try:
+                    goodbye_msg = Message(
+                        msg_type=MessageType.GOODBYE,
+                        sender_id=self.peer_id,
+                        data={"reason": "normal_disconnect"}
+                    )
+                    await self.send_message(goodbye_msg)
+                except Exception as e:
+                    self.logger.debug(f"Error sending goodbye message: {e}")
+                    
+            # Close writer if it exists
             if self.writer:
-                self.writer.close()
-                await self.writer.wait_closed()
-            
-            self.is_connected = False
+                try:
+                    self.writer.close()
+                    await self.writer.wait_closed()
+                except Exception as e:
+                    self.logger.debug(f"Error closing writer: {e}")
+                    
             self.reader = None
             self.writer = None
             self.logger.info("Disconnected from peer")
+            
+        except Exception as e:
+            self.logger.error(f"Error during disconnect: {e}")
+        finally:
+            self.is_disconnecting = False
 
     async def send_message(self, message: Message) -> bool:
         """Send a message to the peer."""
-        if not self.is_connected or not self.writer:
-            raise ConnectionError("Not connected to peer")
+        if not self.is_connected or not self.writer or self.is_disconnecting:
+            return False
             
         try:
             data = message.serialize()
@@ -175,20 +225,20 @@ class Peer:
                     )
                     if sent == 0:
                         self.logger.error("Connection closed while sending message")
-                        await self.disconnect()
+                        await self.disconnect(send_goodbye=False)
                         return False
                     total_sent += sent
                     self.logger.debug(f"Sent {total_sent}/{len(data)} bytes")
                 except asyncio.TimeoutError:
                     self.logger.error("Timeout sending message")
-                    await self.disconnect()
+                    await self.disconnect(send_goodbye=False)
                     return False
                     
             await self.writer.drain()
             return True
         except Exception as e:
             self.logger.error(f"Error sending message: {e}")
-            await self.disconnect()
+            await self.disconnect(send_goodbye=False)
             return False
 
     async def receive_message(self) -> Optional[Message]:
