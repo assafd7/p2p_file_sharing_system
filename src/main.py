@@ -105,9 +105,9 @@ class P2PFileSharingApp:
             
             # Initialize DHT
             self.dht = DHT(
+                node_id=self.security_manager.generate_node_id(),
                 host=local_ip,
-                port=DEFAULT_PORT,
-                bootstrap_nodes=BOOTSTRAP_NODES
+                port=DEFAULT_PORT
             )
             self.logger.debug("DHT initialized")
         except Exception as e:

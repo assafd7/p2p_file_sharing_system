@@ -57,36 +57,27 @@ class DHT:
         self.peers: Dict[str, Peer] = {}
         self.logger = logging.getLogger(__name__)
         self._server = None
-        self._local_peer = None
         self._running = False
+        self._lock = asyncio.Lock()
         
     async def start(self):
         """Start the DHT network."""
+        self.logger.info("Starting DHT network")
         try:
-            self.logger.info("Starting DHT network")
-            
-            # Create and start local peer
-            self._local_peer = Peer(
-                host=self.host,
-                port=self.port,
-                is_local=True
+            # Start listening for incoming connections
+            self._server = await asyncio.start_server(
+                self._handle_connection,
+                self.host,
+                self.port
             )
+            self.logger.info(f"Local peer started listening on {self.host}:{self.port}")
             
             # Register message handlers
-            self._local_peer.register_message_handler(MessageType.PEER_LIST, self.handle_peer_list)
-            self._local_peer.register_message_handler(MessageType.HEARTBEAT, self.handle_heartbeat)
-            
-            # Start listening
-            await self._local_peer.start_listening()
-            self.logger.info(f"Local peer started listening on {self.host}:{self.port}")
+            self._register_message_handlers()
             
             # Connect to bootstrap nodes if available
             if self.bootstrap_nodes:
-                for node_host, node_port in self.bootstrap_nodes:
-                    try:
-                        await self.connect_to_peer(node_host, node_port)
-                    except Exception as e:
-                        self.logger.warning(f"Failed to connect to bootstrap node {node_host}:{node_port}: {e}")
+                await self._connect_to_bootstrap_nodes()
             else:
                 self.logger.info("No bootstrap nodes configured, starting as first node")
             
@@ -97,73 +88,155 @@ class DHT:
             self.logger.error(f"Failed to start DHT network: {e}")
             raise
             
-    async def handle_peer_list(self, message: Message, peer: Peer):
-        """Handle incoming peer list message."""
-        try:
-            peers = message.payload.get('peers', [])
-            self.logger.debug(f"Received peer list with {len(peers)} peers from {getattr(peer, 'peer_id', 'unknown')}")
+    def _register_message_handlers(self):
+        """Register message handlers for the DHT."""
+        # Get the local peer instance
+        local_peer = self.get_local_peer()
+        if local_peer:
+            # Register handlers for different message types
+            local_peer.register_message_handler(MessageType.PEER_LIST, self.handle_peer_list)
+            local_peer.register_message_handler(MessageType.HEARTBEAT, self._handle_heartbeat)
+            local_peer.register_message_handler(MessageType.GOODBYE, self._handle_goodbye)
             
-            # Defensive: check if self._local_peer is set
-            if self._local_peer is None:
-                self.logger.error("Local peer is not initialized (self._local_peer is None)")
-                return
-            
-            # Process each peer in the list
-            for peer_info in peers:
-                try:
-                    # Skip if it's our own peer info
-                    if peer_info['id'] == self._local_peer.peer_id:
-                        continue
-                    # Skip if we already know this peer
-                    if peer_info['id'] in self.peers:
-                        continue
-                    # Connect to the new peer
-                    await self.connect_to_peer(peer_info['address'], peer_info['port'])
-                except Exception as e:
-                    self.logger.warning(f"Failed to process peer {peer_info.get('id')}: {e}")
-        except Exception as e:
-            self.logger.error(f"Error handling peer list: {e}")
-            
-    async def handle_heartbeat(self, message: Message, peer: Peer):
-        """Handle incoming heartbeat message."""
+    async def _handle_heartbeat(self, message: Message, peer: Peer):
+        """Handle heartbeat messages from peers."""
         try:
             # Update peer's last seen timestamp
             peer.last_seen = time.time()
             self.logger.debug(f"Received heartbeat from {peer.peer_id}")
             
+            # Send acknowledgment if needed
+            await peer.send_message(Message(
+                type=MessageType.HEARTBEAT,
+                sender_id=self.get_local_peer_id(),
+                payload={'status': 'ok'}
+            ))
+            
         except Exception as e:
             self.logger.error(f"Error handling heartbeat: {e}")
             
-    async def connect_to_peer(self, host: str, port: int) -> Optional[Peer]:
-        """Connect to a peer and add it to the network."""
+    async def _handle_goodbye(self, message: Message, peer: Peer):
+        """Handle goodbye messages from peers."""
         try:
-            # Create new peer
-            peer = Peer(host=host, port=port)
+            reason = message.payload.get('reason', 'unknown')
+            self.logger.info(f"Peer {peer.peer_id} is disconnecting. Reason: {reason}")
+            await self.remove_peer(peer.peer_id)
             
-            # Register message handlers
+        except Exception as e:
+            self.logger.error(f"Error handling goodbye message: {e}")
+            
+    def get_local_peer(self) -> Optional[Peer]:
+        """Get the local peer instance."""
+        local_peer_id = self.get_local_peer_id()
+        return self.peers.get(local_peer_id)
+        
+    def get_local_peer_id(self) -> str:
+        """Get the local peer's ID."""
+        return f"{self.host}:{self.port}"
+        
+    async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        """Handle new incoming connections."""
+        try:
+            # Get peer address
+            peer_addr = writer.get_extra_info('peername')
+            self.logger.info(f"New connection from {peer_addr[0]}:{peer_addr[1]}")
+            
+            # Create new peer instance
+            peer = Peer(
+                peer_id=f"{peer_addr[0]}:{peer_addr[1]}",
+                host=peer_addr[0],
+                port=peer_addr[1],
+                reader=reader,
+                writer=writer
+            )
+            
+            # Register message handlers for this peer
             peer.register_message_handler(MessageType.PEER_LIST, self.handle_peer_list)
-            peer.register_message_handler(MessageType.HEARTBEAT, self.handle_heartbeat)
-            
-            # Connect to peer
-            await peer.connect()
+            peer.register_message_handler(MessageType.HEARTBEAT, self._handle_heartbeat)
+            peer.register_message_handler(MessageType.GOODBYE, self._handle_goodbye)
             
             # Add to peers list
             self.peers[peer.peer_id] = peer
-            self.logger.info(f"Connected to peer {peer.peer_id} at {host}:{port}")
             
-            # Send our peer list
-            await self.send_peer_list_to_peer(peer)
+            # Start message processing
+            await peer.start()
             
+        except Exception as e:
+            self.logger.error(f"Error handling connection: {e}")
+            if writer:
+                writer.close()
+                await writer.wait_closed()
+                
+    async def handle_peer_list(self, message: Message, peer: Peer):
+        """Handle peer list messages."""
+        try:
+            peers = message.payload.get('peers', [])
+            self.logger.debug(f"Received peer list with {len(peers)} peers from {peer.peer_id}")
+            
+            # Process each peer in the list
+            for peer_info in peers:
+                try:
+                    # Skip if it's our own peer info
+                    if peer_info['id'] == self.get_local_peer_id():
+                        continue
+                        
+                    # Skip if we already know this peer
+                    if peer_info['id'] in self.peers:
+                        continue
+                        
+                    # Connect to the new peer
+                    await self.connect_to_peer(peer_info['host'], peer_info['port'])
+                    
+                except Exception as e:
+                    self.logger.error(f"Error processing peer {peer_info.get('id')}: {e}")
+                    continue
+                    
+        except Exception as e:
+            self.logger.error(f"Error handling peer list: {e}")
+            
+    async def connect_to_peer(self, host: str, port: int) -> Optional[Peer]:
+        """Connect to a peer."""
+        peer_id = f"{host}:{port}"
+        
+        # Skip if already connected
+        if peer_id in self.peers:
+            return self.peers[peer_id]
+            
+        try:
+            # Attempt connection
+            reader, writer = await asyncio.open_connection(host, port)
+            
+            # Create peer instance
+            peer = Peer(
+                peer_id=peer_id,
+                host=host,
+                port=port,
+                reader=reader,
+                writer=writer
+            )
+            
+            # Register message handlers
+            peer.register_message_handler(MessageType.PEER_LIST, self.handle_peer_list)
+            peer.register_message_handler(MessageType.HEARTBEAT, self._handle_heartbeat)
+            peer.register_message_handler(MessageType.GOODBYE, self._handle_goodbye)
+            
+            # Add to peers list
+            self.peers[peer_id] = peer
+            
+            # Start message processing
+            await peer.start()
+            
+            self.logger.info(f"Connected to peer {peer_id}")
             return peer
             
         except Exception as e:
-            self.logger.error(f"Error connecting to peer {host}:{port}: {e}")
+            self.logger.error(f"Error connecting to peer {peer_id}: {e}")
             return None
 
     def _get_bucket_index(self, node_id: str) -> int:
         """Get the index of the k-bucket for a given node ID."""
         # XOR the node IDs and find the first differing bit
-        xor = int(self._local_peer.peer_id, 16) ^ int(node_id, 16)
+        xor = int(self.node_id, 16) ^ int(node_id, 16)
         if xor == 0:
             return 0
         return 159 - (xor.bit_length() - 1)
@@ -235,7 +308,7 @@ class DHT:
                 try:
                     store_msg = Message.create(
                         MessageType.STORE,
-                        self._local_peer.peer_id,
+                        self.node_id,
                         {"key": key, "value": value}
                     )
                     await peer.send_message(store_msg)
@@ -257,7 +330,7 @@ class DHT:
                 try:
                     find_msg = Message.create(
                         MessageType.FIND_VALUE,
-                        self._local_peer.peer_id,
+                        self.node_id,
                         {"key": key}
                     )
                     await peer.send_message(find_msg)
@@ -277,8 +350,8 @@ class DHT:
                     # Send FIND_NODE request to bootstrap node
                     find_msg = Message.create(
                         MessageType.FIND_NODE,
-                        self._local_peer.peer_id,
-                        {"target": self._local_peer.peer_id}
+                        self.node_id,
+                        {"target": self.node_id}
                     )
                     await peer.send_message(find_msg)
             except Exception as e:
@@ -413,7 +486,7 @@ class DHT:
             chunk = peer_list[i:i + chunk_size]
             message = Message(
                 type=MessageType.PEER_LIST,
-                sender_id=self._local_peer.peer_id,
+                sender_id=self.local_peer.peer_id,
                 payload={
                     'peers': chunk,
                     'chunk_index': i // chunk_size,
@@ -461,7 +534,7 @@ class DHT:
                         continue
                         
                     # Skip if it's our own peer info
-                    if peer_id == self._local_peer.peer_id:
+                    if peer_id == self.local_peer.peer_id:
                         continue
                         
                     # Skip if we already know this peer
@@ -477,44 +550,6 @@ class DHT:
         except Exception as e:
             self.logger.error(f"Error handling peer list: {e}")
 
-    async def connect_to_peer(self, host: str, port: int) -> bool:
-        """Connect to a peer using the specified host and port."""
-        try:
-            # Create new peer
-            peer = Peer(host, port, is_local=False)
-            
-            # Try to connect
-            if await peer.connect():
-                self.peers[peer.peer_id] = peer
-                # Register message handlers
-                peer.register_handler(MessageType.PEER_LIST, self.handle_peer_list)
-                
-                # Send our peer list to the new peer
-                await self.broadcast_peer_list()
-                return True
-                
-        except Exception as e:
-            self.logger.error(f"Error connecting to peer {host}:{port}: {e}")
-            if peer:
-                await peer.disconnect()
-                
-        return False
-
-    def get_connected_peers(self) -> List[PeerInfo]:
-        """Return a list of connected peers."""
-        connected_peers = []
-        for peer in self.peers.values():
-            if peer.is_connected:
-                peer_info = PeerInfo(
-                    id=peer.peer_id,
-                    address=peer.host,
-                    port=peer.port,
-                    last_seen=datetime.now(),
-                    is_connected=True
-                )
-                connected_peers.append(peer_info)
-        return connected_peers
-
     async def start(self):
         """Start the DHT network."""
         try:
@@ -524,8 +559,8 @@ class DHT:
             self.routing_table = {}
 
             # Create local peer and start listening on all interfaces
-            self._local_peer = Peer("0.0.0.0", self.port, self._local_peer.peer_id, is_local=True)
-            asyncio.create_task(self._local_peer.start_listening())
+            self.local_peer = Peer("0.0.0.0", self.port, self.node_id, is_local=True)
+            asyncio.create_task(self.local_peer.start_listening())
             self.logger.info(f"Local peer started listening on 0.0.0.0:{self.port}")
 
             # Start periodic cleanup
