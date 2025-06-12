@@ -516,7 +516,7 @@ class MainWindow(QMainWindow):
         """Update the file list in the UI."""
         try:
             self.file_list.clear()
-            files = self.file_manager.get_shared_files()
+            files = self.file_manager.get_shared_files_sync()
             
             for file in files:
                 item = QTreeWidgetItem([

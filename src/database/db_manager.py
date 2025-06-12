@@ -8,9 +8,79 @@ from pathlib import Path
 
 class DatabaseManager:
     def __init__(self, db_path: str):
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.logger = logging.getLogger("DatabaseManager")
+        """Initialize database manager."""
+        self.db_path = db_path
+        self.logger = logging.getLogger(__name__)
+        self._connection = None
+        self._initialize_db()
+
+    def _initialize_db(self):
+        """Initialize database tables."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Create users table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        user_id TEXT PRIMARY KEY,
+                        username TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                # Create peers table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS peers (
+                        peer_id TEXT PRIMARY KEY,
+                        host TEXT NOT NULL,
+                        port INTEGER NOT NULL,
+                        username TEXT,
+                        last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                
+                # Create files table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS files (
+                        file_id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        size INTEGER NOT NULL,
+                        type TEXT NOT NULL,
+                        owner_id TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (owner_id) REFERENCES users(user_id)
+                    )
+                """)
+                
+                conn.commit()
+                self.logger.info("Database initialized successfully")
+                
+        except Exception as e:
+            self.logger.error(f"Error initializing database: {e}")
+            raise
+
+    def get_connection(self):
+        """Get a database connection."""
+        try:
+            if self._connection is None:
+                self._connection = sqlite3.connect(self.db_path)
+                self._connection.row_factory = sqlite3.Row
+            return self._connection
+        except Exception as e:
+            self.logger.error(f"Error getting database connection: {e}")
+            raise
+
+    def close(self):
+        """Close the database connection."""
+        try:
+            if self._connection is not None:
+                self._connection.close()
+                self._connection = None
+        except Exception as e:
+            self.logger.error(f"Error closing database connection: {e}")
 
     async def initialize(self):
         """Initialize the database with required tables."""

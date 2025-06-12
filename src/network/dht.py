@@ -630,3 +630,63 @@ class DHT:
                         
         except Exception as e:
             self.logger.error(f"Error handling peer list: {e}")
+
+    async def _process_messages(self, peer: Peer):
+        """Process incoming messages from a peer."""
+        try:
+            while True:
+                # Read message length
+                length_data = await peer.reader.read(4)
+                if not length_data:
+                    break
+                    
+                length = int.from_bytes(length_data, 'big')
+                
+                # Read message data
+                data = await peer.reader.read(length)
+                if not data:
+                    break
+                    
+                # Parse message
+                message = Message.deserialize(data)
+                
+                # Handle message
+                if message.type in self.message_handlers:
+                    await self.message_handlers[message.type](message, peer)
+                else:
+                    self.logger.warning(f"No handler for message type: {message.type}")
+                    
+        except Exception as e:
+            self.logger.error(f"Error processing messages from peer {peer.id}: {e}")
+        finally:
+            # Clean up peer connection
+            await self._handle_peer_disconnect(peer)
+
+    async def _handle_peer_disconnect(self, peer: Peer):
+        """Handle peer disconnection."""
+        try:
+            if peer.id in self.peers:
+                del self.peers[peer.id]
+                if hasattr(self, 'on_peer_disconnected'):
+                    self.on_peer_disconnected(peer)
+                self.logger.info(f"Peer disconnected: {peer.id}")
+        except Exception as e:
+            self.logger.error(f"Error handling peer disconnect: {e}")
+
+    async def send_message(self, message: Message, peer: Peer):
+        """Send a message to a peer."""
+        try:
+            # Serialize message
+            data = message.serialize()
+            
+            # Send message length
+            length = len(data)
+            await peer.writer.write(length.to_bytes(4, 'big'))
+            
+            # Send message data
+            await peer.writer.write(data)
+            await peer.writer.drain()
+            
+        except Exception as e:
+            self.logger.error(f"Error sending message to peer {peer.id}: {e}")
+            await self._handle_peer_disconnect(peer)
