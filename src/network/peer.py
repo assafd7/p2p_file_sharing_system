@@ -34,56 +34,93 @@ class Peer:
 
     async def connect(self) -> bool:
         """Establish connection with the peer."""
-        try:
-            # Validate host and port
-            if not self.host or not self.port:
-                self.logger.error("Invalid host or port")
-                return False
+        retry_count = 0
+        retry_delay = INITIAL_RETRY_DELAY
 
-            # Try to resolve hostname
+        while retry_count < MAX_RETRIES:
             try:
-                socket.gethostbyname(self.host)
-            except socket.gaierror:
-                self.logger.error(f"Could not resolve hostname: {self.host}")
-                return False
+                # Validate host and port
+                if not self.host or not self.port:
+                    self.logger.error("Invalid host or port")
+                    return False
 
-            # Attempt connection with timeout
-            try:
-                self.reader, self.writer = await asyncio.wait_for(
-                    asyncio.open_connection(self.host, self.port),
-                    timeout=CONNECTION_TIMEOUT
-                )
-            except asyncio.TimeoutError:
-                self.logger.error(f"Connection timeout to {self.host}:{self.port}")
-                return False
-            except ConnectionRefusedError:
-                self.logger.error(f"Connection refused by {self.host}:{self.port}")
-                return False
+                # Try to resolve hostname
+                try:
+                    socket.gethostbyname(self.host)
+                except socket.gaierror:
+                    self.logger.error(f"Could not resolve hostname: {self.host}")
+                    return False
+
+                # Attempt connection with timeout
+                try:
+                    self.logger.info(f"Attempting to connect to {self.host}:{self.port} (attempt {retry_count + 1}/{MAX_RETRIES})")
+                    self.reader, self.writer = await asyncio.wait_for(
+                        asyncio.open_connection(self.host, self.port),
+                        timeout=CONNECTION_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    self.logger.error(f"Connection timeout to {self.host}:{self.port}")
+                    retry_count += 1
+                    if retry_count < MAX_RETRIES:
+                        self.logger.info(f"Retrying in {retry_delay} seconds...")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
+                        continue
+                    return False
+                except ConnectionRefusedError:
+                    self.logger.error(f"Connection refused by {self.host}:{self.port}")
+                    retry_count += 1
+                    if retry_count < MAX_RETRIES:
+                        self.logger.info(f"Retrying in {retry_delay} seconds...")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
+                        continue
+                    return False
+                except Exception as e:
+                    self.logger.error(f"Failed to connect to {self.host}:{self.port}: {e}")
+                    retry_count += 1
+                    if retry_count < MAX_RETRIES:
+                        self.logger.info(f"Retrying in {retry_delay} seconds...")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
+                        continue
+                    return False
+
+                self.is_connected = True
+                self.logger.info(f"Connected to peer {self.host}:{self.port}")
+                
+                # Send HELLO message
+                try:
+                    hello_msg = Message.create(
+                        MessageType.HELLO,
+                        self.peer_id,
+                        {"version": "1.0"}
+                    )
+                    await self.send_message(hello_msg)
+                    return True
+                except Exception as e:
+                    self.logger.error(f"Failed to send HELLO message: {e}")
+                    await self.disconnect()
+                    retry_count += 1
+                    if retry_count < MAX_RETRIES:
+                        self.logger.info(f"Retrying in {retry_delay} seconds...")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
+                        continue
+                    return False
+                
             except Exception as e:
-                self.logger.error(f"Failed to connect to {self.host}:{self.port}: {e}")
-                return False
-
-            self.is_connected = True
-            self.logger.info(f"Connected to peer {self.host}:{self.port}")
-            
-            # Send HELLO message
-            try:
-                hello_msg = Message.create(
-                    MessageType.HELLO,
-                    self.peer_id,
-                    {"version": "1.0"}
-                )
-                await self.send_message(hello_msg)
-                return True
-            except Exception as e:
-                self.logger.error(f"Failed to send HELLO message: {e}")
+                self.logger.error(f"Error in connect: {e}")
                 await self.disconnect()
+                retry_count += 1
+                if retry_count < MAX_RETRIES:
+                    self.logger.info(f"Retrying in {retry_delay} seconds...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
+                    continue
                 return False
-            
-        except Exception as e:
-            self.logger.error(f"Error in connect: {e}")
-            await self.disconnect()
-            return False
+
+        return False
 
     async def disconnect(self):
         """Gracefully disconnect from the peer."""

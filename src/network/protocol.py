@@ -82,5 +82,8 @@ class InvalidMessageError(ProtocolError):
 # Constants
 MAX_MESSAGE_SIZE = 1024 * 1024  # 1MB
 CHUNK_SIZE = 4096  # 4KB
-CONNECTION_TIMEOUT = 5  # seconds
-READ_TIMEOUT = 2  # seconds 
+CONNECTION_TIMEOUT = 30  # seconds
+READ_TIMEOUT = 10  # seconds
+MAX_RETRIES = 3  # Maximum number of connection retries
+INITIAL_RETRY_DELAY = 1  # Initial delay between retries in seconds
+MAX_RETRY_DELAY = 10  # Maximum delay between retries in seconds 
