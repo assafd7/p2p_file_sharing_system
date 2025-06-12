@@ -23,6 +23,7 @@ class DatabaseManager:
                     port INTEGER NOT NULL,
                     last_seen TIMESTAMP NOT NULL,
                     is_connected BOOLEAN NOT NULL,
+                    username TEXT,
                     metadata TEXT
                 )
             ''')
@@ -90,18 +91,19 @@ class DatabaseManager:
 
             await db.commit()
 
-    async def add_peer(self, peer_id: str, address: str, port: int, metadata: Optional[Dict] = None):
+    async def add_peer(self, peer_id: str, address: str, port: int, username: str = None, metadata: Optional[Dict] = None):
         """Add or update a peer in the database."""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute('''
-                INSERT OR REPLACE INTO peers (id, address, port, last_seen, is_connected, metadata)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO peers (id, address, port, last_seen, is_connected, username, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (
                 peer_id,
                 address,
                 port,
                 datetime.now().isoformat(),
                 True,
+                username,
                 json.dumps(metadata or {})
             ))
             await db.commit()
@@ -124,6 +126,16 @@ class DatabaseManager:
                 SET is_connected = ?, last_seen = ?
                 WHERE id = ?
             ''', (is_connected, datetime.now().isoformat(), peer_id))
+            await db.commit()
+
+    async def update_peer_username(self, peer_id: str, username: str):
+        """Update peer's username."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute('''
+                UPDATE peers
+                SET username = ?
+                WHERE id = ?
+            ''', (username, peer_id))
             await db.commit()
 
     async def add_file(self, file_hash: str, name: str, size: int, owner_id: str,

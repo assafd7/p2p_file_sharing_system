@@ -8,15 +8,17 @@ from datetime import datetime
 import logging
 
 class MessageType(Enum):
-    HELLO = "HELLO"
+    """Types of messages that can be sent between peers."""
+    HELLO = "hello"
     PING = "PING"
     PONG = "PONG"
     FILE_LIST = "FILE_LIST"
-    FILE_REQUEST = "FILE_REQUEST"
-    FILE_RESPONSE = "FILE_RESPONSE"
-    PEER_LIST = "PEER_LIST"
-    GOODBYE = "GOODBYE"
-    HEARTBEAT = "HEARTBEAT"
+    FILE_REQUEST = "file_request"
+    FILE_RESPONSE = "file_response"
+    PEER_LIST = "peer_list"
+    GOODBYE = "goodbye"
+    HEARTBEAT = "heartbeat"
+    USER_INFO = "user_info"  # New message type for username exchange
 
 @dataclass
 class Message:

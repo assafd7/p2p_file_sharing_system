@@ -223,6 +223,13 @@ class DHT:
             # Start message processing
             await peer.start()
             
+            # Send our username to the peer
+            await peer.send_message(Message(
+                type=MessageType.USER_INFO,
+                sender_id=self.node_id,
+                payload={'username': self.username}
+            ))
+            
         except Exception as e:
             self.logger.error(f"Error handling connection: {e}")
             if writer:
@@ -281,6 +288,7 @@ class DHT:
             peer.register_message_handler(MessageType.PEER_LIST, self.handle_peer_list)
             peer.register_message_handler(MessageType.HEARTBEAT, self._handle_heartbeat)
             peer.register_message_handler(MessageType.GOODBYE, self._handle_goodbye)
+            peer.register_message_handler(MessageType.USER_INFO, self._handle_user_info)
             
             # Add to peers list
             self.peers[peer_id] = peer
@@ -288,12 +296,30 @@ class DHT:
             # Start message processing
             await peer.start()
             
+            # Send our username to the peer
+            await peer.send_message(Message(
+                type=MessageType.USER_INFO,
+                sender_id=self.node_id,
+                payload={'username': self.username}
+            ))
+            
             self.logger.info(f"Connected to peer {peer_id}")
             return peer
             
         except Exception as e:
             self.logger.error(f"Error connecting to peer {peer_id}: {e}")
             return None
+
+    async def _handle_user_info(self, message: Message, peer: Peer):
+        """Handle user info messages from peers."""
+        try:
+            username = message.payload.get('username')
+            if username:
+                # Update peer's username in database
+                await self.db_manager.update_peer_username(peer.peer_id, username)
+                self.logger.info(f"Updated username for peer {peer.peer_id}: {username}")
+        except Exception as e:
+            self.logger.error(f"Error handling user info: {e}")
 
     def _get_bucket_index(self, node_id: str) -> int:
         """Get the index of the k-bucket for a given node ID."""

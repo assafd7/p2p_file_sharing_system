@@ -154,27 +154,36 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(transfers_tab, "Transfers")
 
     def setup_peers_tab(self):
-        """Setup the peers tab with peer list and connection controls."""
+        """Set up the peers tab."""
         peers_tab = QWidget()
-        layout = QVBoxLayout(peers_tab)
-
+        layout = QVBoxLayout()
+        
         # Create peer list
         self.peer_list = QTreeWidget()
-        self.peer_list.setHeaderLabels(["ID", "Address", "Status", "Last Seen"])
+        self.peer_list.setHeaderLabels(["Username", "Address", "Port", "Status"])
+        self.peer_list.setColumnWidth(0, 150)  # Username column
+        self.peer_list.setColumnWidth(1, 150)  # Address column
+        self.peer_list.setColumnWidth(2, 80)   # Port column
+        self.peer_list.setColumnWidth(3, 100)  # Status column
         layout.addWidget(self.peer_list)
-
-        # Create peer controls
-        controls_layout = QHBoxLayout()
         
-        self.connect_button = QPushButton("Connect")
-        self.connect_button.clicked.connect(self.connect_to_peer)
-        controls_layout.addWidget(self.connect_button)
-
-        self.disconnect_button = QPushButton("Disconnect")
-        self.disconnect_button.clicked.connect(self.disconnect_from_peer)
-        controls_layout.addWidget(self.disconnect_button)
-
-        layout.addLayout(controls_layout)
+        # Add buttons
+        button_layout = QHBoxLayout()
+        
+        connect_button = QPushButton("Connect to Peer")
+        connect_button.clicked.connect(self.connect_to_peer)
+        button_layout.addWidget(connect_button)
+        
+        disconnect_button = QPushButton("Disconnect")
+        disconnect_button.clicked.connect(self.disconnect_from_peer)
+        button_layout.addWidget(disconnect_button)
+        
+        refresh_button = QPushButton("Refresh")
+        refresh_button.clicked.connect(self.update_peer_list)
+        button_layout.addWidget(refresh_button)
+        
+        layout.addLayout(button_layout)
+        peers_tab.setLayout(layout)
         self.tab_widget.addTab(peers_tab, "Peers")
 
     def setup_settings_tab(self):
@@ -544,12 +553,17 @@ class MainWindow(QMainWindow):
             self.peer_list.clear()
             peers = self.network_manager.get_connected_peers()
             for peer in peers:
+                # Get username from database
+                peer_info = self.db_manager.get_peer(peer.id)
+                username = peer_info.get('username', 'Unknown') if peer_info else 'Unknown'
+                
                 item = QTreeWidgetItem([
-                    peer.id[:8],  # Short ID
+                    username,  # Username instead of ID
                     peer.address,
                     str(peer.port),
                     "Connected" if peer.is_connected else "Disconnected"
                 ])
+                item.setData(0, Qt.ItemDataRole.UserRole, peer)  # Store peer object for context menu
                 self.peer_list.addTopLevelItem(item)
         except Exception as e:
             self.logger.error(f"Error updating peer list: {e}")
