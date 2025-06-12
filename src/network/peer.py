@@ -75,93 +75,47 @@ class Peer:
         return hashlib.sha1(data).hexdigest()
 
     async def connect(self) -> bool:
-        """Establish connection with the peer."""
-        retry_count = 0
-        retry_delay = INITIAL_RETRY_DELAY
-
-        while retry_count < MAX_RETRIES:
+        """Connect to the peer."""
+        if self.is_connected:
+            return True
+            
+        for attempt in range(self.max_retries):
             try:
-                # Validate host and port
-                if not self.host or not self.port:
-                    self.logger.error("Invalid host or port")
-                    return False
-
-                # Try to resolve hostname
-                try:
-                    socket.gethostbyname(self.host)
-                except socket.gaierror:
-                    self.logger.error(f"Could not resolve hostname: {self.host}")
-                    return False
-
-                # Attempt connection with timeout
-                try:
-                    self.logger.info(f"Attempting to connect to {self.host}:{self.port} (attempt {retry_count + 1}/{MAX_RETRIES})")
-                    self.reader, self.writer = await asyncio.wait_for(
-                        asyncio.open_connection(self.host, self.port),
-                        timeout=CONNECTION_TIMEOUT
-                    )
-                except asyncio.TimeoutError:
-                    self.logger.error(f"Connection timeout to {self.host}:{self.port}")
-                    retry_count += 1
-                    if retry_count < MAX_RETRIES:
-                        self.logger.info(f"Retrying in {retry_delay} seconds...")
-                        await asyncio.sleep(retry_delay)
-                        retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
-                        continue
-                    return False
-                except ConnectionRefusedError:
-                    self.logger.error(f"Connection refused by {self.host}:{self.port}")
-                    retry_count += 1
-                    if retry_count < MAX_RETRIES:
-                        self.logger.info(f"Retrying in {retry_delay} seconds...")
-                        await asyncio.sleep(retry_delay)
-                        retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
-                        continue
-                    return False
-                except Exception as e:
-                    self.logger.error(f"Failed to connect to {self.host}:{self.port}: {e}")
-                    retry_count += 1
-                    if retry_count < MAX_RETRIES:
-                        self.logger.info(f"Retrying in {retry_delay} seconds...")
-                        await asyncio.sleep(retry_delay)
-                        retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
-                        continue
-                    return False
-
+                self.logger.info(f"Attempting to connect to {self.host}:{self.port} (attempt {attempt + 1}/{self.max_retries})")
+                
+                # Create connection with timeouts
+                self.reader, self.writer = await asyncio.wait_for(
+                    asyncio.open_connection(self.host, self.port),
+                    timeout=self.connection_timeout
+                )
+                
+                # Verify connection was successful
+                if not self.reader or not self.writer:
+                    raise ConnectionError("Failed to establish connection")
+                    
                 self.is_connected = True
                 self.logger.info(f"Connected to peer {self.host}:{self.port}")
                 
-                # Send HELLO message
-                try:
-                    hello_msg = Message.create(
-                        MessageType.HELLO,
-                        self.peer_id,
-                        {"version": "1.0"}
-                    )
-                    await self.send_message(hello_msg)
-                    return True
-                except Exception as e:
-                    self.logger.error(f"Failed to send HELLO message: {e}")
-                    await self.disconnect()
-                    retry_count += 1
-                    if retry_count < MAX_RETRIES:
-                        self.logger.info(f"Retrying in {retry_delay} seconds...")
-                        await asyncio.sleep(retry_delay)
-                        retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
-                        continue
-                    return False
+                # Start message processing
+                self.processing_task = asyncio.create_task(self._process_messages())
                 
+                # Start heartbeat if not local
+                if not self.is_local:
+                    self.heartbeat_task = asyncio.create_task(self._heartbeat())
+                    
+                return True
+                
+            except asyncio.TimeoutError:
+                self.logger.error(f"Connection timeout to {self.host}:{self.port}")
+            except ConnectionRefusedError:
+                self.logger.error(f"Connection refused by {self.host}:{self.port}")
             except Exception as e:
-                self.logger.error(f"Error in connect: {e}")
-                await self.disconnect()
-                retry_count += 1
-                if retry_count < MAX_RETRIES:
-                    self.logger.info(f"Retrying in {retry_delay} seconds...")
-                    await asyncio.sleep(retry_delay)
-                    retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
-                    continue
-                return False
-
+                self.logger.error(f"Error connecting to {self.host}:{self.port}: {e}")
+                
+            # Wait before retrying
+            if attempt < self.max_retries - 1:
+                await asyncio.sleep(self.retry_delay * (attempt + 1))
+                
         return False
 
     async def disconnect(self, send_goodbye: bool = True) -> None:
@@ -222,31 +176,73 @@ class Peer:
 
     async def send_message(self, message: Message) -> bool:
         """Send a message to the peer."""
-        if not self.is_connected or not self.writer or self.is_disconnecting:
+        if not self.is_connected:
+            self.logger.debug("Cannot send message: not connected")
+            return False
+            
+        if not self.writer:
+            self.logger.debug("Cannot send message: no writer")
+            return False
+            
+        if self.is_disconnecting:
+            self.logger.debug("Cannot send message: disconnecting")
+            return False
+            
+        if self.writer.is_closing():
+            self.logger.debug("Cannot send message: writer is closing")
             return False
             
         try:
             data = message.serialize()
+            if not data:
+                self.logger.error("Failed to serialize message")
+                return False
+                
             total_sent = 0
             while total_sent < len(data):
                 try:
+                    # Ensure writer is still valid
+                    if not self.writer or self.writer.is_closing():
+                        self.logger.error("Writer became invalid during send")
+                        return False
+                        
                     sent = await asyncio.wait_for(
                         self.writer.write(data[total_sent:]),
-                        timeout=READ_TIMEOUT
+                        timeout=WRITE_TIMEOUT
                     )
+                    
                     if sent == 0:
                         self.logger.error("Connection closed while sending message")
                         await self.disconnect(send_goodbye=False)
                         return False
+                        
                     total_sent += sent
                     self.logger.debug(f"Sent {total_sent}/{len(data)} bytes")
+                    
                 except asyncio.TimeoutError:
                     self.logger.error("Timeout sending message")
                     await self.disconnect(send_goodbye=False)
                     return False
+                except Exception as e:
+                    self.logger.error(f"Error during send: {e}")
+                    await self.disconnect(send_goodbye=False)
+                    return False
                     
-            await self.writer.drain()
-            return True
+            try:
+                await asyncio.wait_for(
+                    self.writer.drain(),
+                    timeout=WRITE_TIMEOUT
+                )
+                return True
+            except asyncio.TimeoutError:
+                self.logger.error("Timeout draining writer")
+                await self.disconnect(send_goodbye=False)
+                return False
+            except Exception as e:
+                self.logger.error(f"Error draining writer: {e}")
+                await self.disconnect(send_goodbye=False)
+                return False
+                
         except Exception as e:
             self.logger.error(f"Error sending message: {e}")
             await self.disconnect(send_goodbye=False)
