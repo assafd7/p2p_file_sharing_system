@@ -59,6 +59,12 @@ class DHT:
         self._server = None
         self._running = False
         self._lock = asyncio.Lock()
+        self._cleanup_task = None
+        
+    @property
+    def node_id(self) -> str:
+        """Get the node ID (host:port)."""
+        return f"{self.host}:{self.port}"
         
     async def start(self):
         """Start the DHT network."""
@@ -75,6 +81,9 @@ class DHT:
             # Register message handlers
             self._register_message_handlers()
             
+            # Start periodic cleanup task
+            self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
+            
             # Connect to bootstrap nodes if available
             if self.bootstrap_nodes:
                 await self._connect_to_bootstrap_nodes()
@@ -87,6 +96,60 @@ class DHT:
         except Exception as e:
             self.logger.error(f"Failed to start DHT network: {e}")
             raise
+            
+    async def _periodic_cleanup(self):
+        """Periodically clean up stale peers."""
+        while self._running:
+            try:
+                current_time = time.time()
+                stale_peers = []
+                
+                # Find stale peers
+                for peer_id, peer in self.peers.items():
+                    if current_time - peer.last_seen > 300:  # 5 minutes
+                        stale_peers.append(peer_id)
+                
+                # Remove stale peers
+                for peer_id in stale_peers:
+                    await self.remove_peer(peer_id)
+                    
+                await asyncio.sleep(60)  # Check every minute
+                
+            except Exception as e:
+                self.logger.error(f"Error in periodic cleanup: {e}")
+                await asyncio.sleep(60)  # Wait a minute before retrying
+                
+    async def stop(self):
+        """Stop the DHT network."""
+        if self._running:
+            self._running = False
+            
+            # Cancel cleanup task
+            if self._cleanup_task:
+                self._cleanup_task.cancel()
+                try:
+                    await self._cleanup_task
+                except asyncio.CancelledError:
+                    pass
+                    
+            # Disconnect from all peers
+            for peer_id in list(self.peers.keys()):
+                await self.remove_peer(peer_id)
+                
+            # Close server
+            if self._server:
+                self._server.close()
+                await self._server.wait_closed()
+                
+            self.logger.info("DHT network stopped")
+            
+    async def remove_peer(self, peer_id: str):
+        """Remove a peer from the network."""
+        if peer_id in self.peers:
+            peer = self.peers[peer_id]
+            await peer.disconnect()
+            del self.peers[peer_id]
+            self.logger.info(f"Removed peer {peer_id}")
             
     def _register_message_handlers(self):
         """Register message handlers for the DHT."""
@@ -108,7 +171,7 @@ class DHT:
             # Send acknowledgment if needed
             await peer.send_message(Message(
                 type=MessageType.HEARTBEAT,
-                sender_id=self.get_local_peer_id(),
+                sender_id=self.node_id,
                 payload={'status': 'ok'}
             ))
             
@@ -127,12 +190,7 @@ class DHT:
             
     def get_local_peer(self) -> Optional[Peer]:
         """Get the local peer instance."""
-        local_peer_id = self.get_local_peer_id()
-        return self.peers.get(local_peer_id)
-        
-    def get_local_peer_id(self) -> str:
-        """Get the local peer's ID."""
-        return f"{self.host}:{self.port}"
+        return self.peers.get(self.node_id)
         
     async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """Handle new incoming connections."""
@@ -177,7 +235,7 @@ class DHT:
             for peer_info in peers:
                 try:
                     # Skip if it's our own peer info
-                    if peer_info['id'] == self.get_local_peer_id():
+                    if peer_info['id'] == self.node_id:
                         continue
                         
                     # Skip if we already know this peer
@@ -549,52 +607,3 @@ class DHT:
                         
         except Exception as e:
             self.logger.error(f"Error handling peer list: {e}")
-
-    async def start(self):
-        """Start the DHT network."""
-        try:
-            self.logger.info("Starting DHT network")
-
-            # Initialize routing table
-            self.routing_table = {}
-
-            # Create local peer and start listening on all interfaces
-            self.local_peer = Peer("0.0.0.0", self.port, self.node_id, is_local=True)
-            asyncio.create_task(self.local_peer.start_listening())
-            self.logger.info(f"Local peer started listening on 0.0.0.0:{self.port}")
-
-            # Start periodic cleanup
-            asyncio.create_task(self._periodic_cleanup())
-
-            # Start periodic peer health checks
-            asyncio.create_task(self._periodic_health_check())
-
-            self.logger.info("DHT network started successfully")
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to start DHT network: {e}")
-            return False
-
-    async def _periodic_cleanup(self):
-        """Periodically clean up old nodes and merge buckets."""
-        while True:
-            try:
-                self.cleanup()
-                await asyncio.sleep(3600)  # Run every hour
-            except Exception as e:
-                self.logger.error(f"Error in periodic cleanup: {e}")
-                await asyncio.sleep(60)  # Wait a minute before retrying
-
-    async def _periodic_health_check(self):
-        """Periodically check health of connected peers."""
-        while True:
-            try:
-                for peer in self.peers.values():
-                    if peer.is_connected:
-                        if not await peer.ping():
-                            self.logger.warning(f"Peer {peer.peer_id} failed health check")
-                            await self.remove_node(peer.peer_id)
-                await asyncio.sleep(300)  # Check every 5 minutes
-            except Exception as e:
-                self.logger.error(f"Error in periodic health check: {e}")
-                await asyncio.sleep(60)  # Wait a minute before retrying
