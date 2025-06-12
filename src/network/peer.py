@@ -32,7 +32,7 @@ class PeerInfo:
     is_connected: bool = False
 
 class Peer:
-    def __init__(self, host: str, port: int, peer_id: str = None):
+    def __init__(self, host: str, port: int, peer_id: str = None, is_local: bool = False):
         """Initialize a peer connection."""
         self.host = host
         self.port = port
@@ -41,6 +41,7 @@ class Peer:
         self.writer = None
         self.is_connected = False
         self.is_disconnecting = False  # Add flag to track disconnection state
+        self.is_local = is_local  # Add back is_local flag
         self.known_peers = set()  # Track known peers
         self.logger = logging.getLogger(f"Peer-{self.peer_id}")
         self.last_activity = time.time()
