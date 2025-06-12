@@ -51,8 +51,8 @@ class KBucket:
 class DHT:
     """Distributed Hash Table for peer discovery and routing."""
     
-    def __init__(self, host: str, port: int, db_manager: DatabaseManager, 
-                 bootstrap_nodes: List[Tuple[str, int]] = None, username: str = "Anonymous"):
+    def __init__(self, host: str, port: int, bootstrap_nodes: List[Tuple[str, int]] = None, 
+                 username: str = "Anonymous", db_manager: Optional[DatabaseManager] = None):
         """Initialize the DHT network."""
         self.host = host
         self.port = port
@@ -218,8 +218,9 @@ class DHT:
             username = message.payload.get('username')
             if username:
                 self.logger.info(f"Received username from peer {peer.id}: {username}")
-                # Update peer's username in database
-                await self.db_manager.update_peer_username(peer.id, username)
+                # Update peer's username in database if db_manager is available
+                if self.db_manager:
+                    await self.db_manager.update_peer_username(peer.id, username)
                 # Update peer object
                 peer.username = username
                 # Notify UI
