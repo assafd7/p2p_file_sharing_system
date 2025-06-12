@@ -22,11 +22,17 @@ class MessageType(Enum):
 class Message:
     """Message class for network communication."""
     
-    def __init__(self, msg_type: MessageType, sender_id: str, payload: Dict[str, Any], timestamp: Optional[float] = None):
-        self.type = msg_type
+    def __init__(self, msg_type: Optional[MessageType] = None, type: Optional[MessageType] = None,
+                 sender_id: str = None, payload: Dict[str, Any] = None, timestamp: Optional[float] = None):
+        # Handle both type and msg_type parameters for backward compatibility
+        self.type = msg_type if msg_type is not None else type
+        if self.type is None:
+            raise ValueError("Either msg_type or type must be provided")
+            
         self.sender_id = sender_id
-        self.payload = payload
+        self.payload = payload or {}
         self.timestamp = timestamp or time.time()
+        self.logger = logging.getLogger(__name__)
         
     def serialize(self) -> bytes:
         """Serialize the message to bytes."""
@@ -63,7 +69,7 @@ class Message:
             msg_dict = json.loads(json_data)
             
             return cls(
-                msg_type=MessageType(msg_dict['type']),
+                type=MessageType(msg_dict['type']),  # Use 'type' here since that's what's in the JSON
                 sender_id=msg_dict['sender_id'],
                 payload=msg_dict['payload'],
                 timestamp=msg_dict['timestamp']
