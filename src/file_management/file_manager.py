@@ -256,17 +256,15 @@ class FileManager:
             List of FileMetadata objects
         """
         try:
+            # Get the current event loop
             loop = asyncio.get_event_loop()
+            
+            # If we're already in an async context, raise an error
             if loop.is_running():
-                # If we're in an async context, create a new event loop
-                new_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(new_loop)
-                try:
-                    return new_loop.run_until_complete(self.get_shared_files_async())
-                finally:
-                    new_loop.close()
-            else:
-                return loop.run_until_complete(self.get_shared_files_async())
+                raise RuntimeError("Cannot call get_shared_files from an async context. Use get_shared_files_async instead.")
+            
+            # Run the async function in the current event loop
+            return loop.run_until_complete(self.get_shared_files_async())
         except Exception as e:
             self.logger.error(f"Error getting shared files: {e}")
             return []
