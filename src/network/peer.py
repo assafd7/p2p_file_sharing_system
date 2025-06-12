@@ -374,42 +374,34 @@ class Peer:
         self.known_peers = {p for p in self.known_peers if p.id != peer_id} 
 
     async def _process_messages(self):
-        """Process incoming messages from the peer."""
-        try:
-            while self.is_connected and self.reader and not self.reader.at_eof():
-                try:
-                    message = await self.receive_message()
-                    if message:
-                        # Update last activity time
-                        self.last_activity = time.time()
-                        
-                        # Handle message based on type
-                        if message.msg_type in self.message_handlers:
-                            try:
-                                await self.message_handlers[message.msg_type](message)
-                            except Exception as e:
-                                self.logger.error(f"Error handling message {message.msg_type}: {e}")
-                        else:
-                            self.logger.warning(f"No handler for message type: {message.msg_type}")
-                            
-                except MessageSizeError as e:
-                    self.logger.error(f"Message size error: {e}")
-                    await self.disconnect(send_goodbye=False)
-                    break
-                except InvalidMessageError as e:
-                    self.logger.error(f"Invalid message: {e}")
-                    await self.disconnect(send_goodbye=False)
-                    break
-                except Exception as e:
-                    self.logger.error(f"Error processing message: {e}")
-                    await self.disconnect(send_goodbye=False)
+        """Process incoming messages."""
+        while self.is_connected and not self.is_disconnecting:
+            try:
+                # Read message
+                message = await self._read_message()
+                if not message:
                     break
                     
-        except Exception as e:
-            self.logger.error(f"Error in message processing loop: {e}")
-        finally:
-            if self.is_connected:
-                await self.disconnect(send_goodbye=False)
+                # Process message
+                if message.type in self.message_handlers:
+                    try:
+                        await self.message_handlers[message.type](message)
+                    except Exception as e:
+                        self.logger.error(f"Error handling message: {e}")
+                else:
+                    self.logger.warning(f"No handler for message type: {message.type}")
+                    
+            except Exception as e:
+                self.logger.error(f"Error processing message: {e}")
+                break
+                
+        # Clean up if we exit the loop
+        if self.is_connected:
+            await self.disconnect()
+
+    async def receive_message(self) -> Optional[Message]:
+        """Receive a message from the peer."""
+        return await self._read_message()
 
     async def _heartbeat(self):
         """Send periodic heartbeat messages to keep the connection alive."""
