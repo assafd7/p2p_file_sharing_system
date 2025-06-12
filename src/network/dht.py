@@ -377,46 +377,25 @@ class DHT:
     async def connect_to_peer(self, host: str, port: int) -> bool:
         """Connect to a peer using the specified host and port."""
         try:
-            # Validate host and port
-            if not host or not port:
-                self.logger.error("Invalid host or port")
-                return False
-                
-            # Try to parse port as integer
-            try:
-                port = int(port)
-                if port < 1 or port > 65535:
-                    self.logger.error("Port must be between 1 and 65535")
-                    return False
-            except ValueError:
-                self.logger.error("Port must be a valid number")
-                return False
-
-            # Check if we're already connected to this peer
-            for peer in self.peers.values():
-                if peer.host == host and peer.port == port:
-                    self.logger.info(f"Already connected to peer {host}:{port}")
-                    return True
-
-            # Create and connect to peer
+            # Create new peer
             peer = Peer(host, port, is_local=False)
+            
+            # Try to connect
             if await peer.connect():
                 self.peers[peer.peer_id] = peer
-                
                 # Register message handlers
                 peer.register_handler(MessageType.PEER_LIST, self.handle_peer_list)
                 
                 # Send our peer list to the new peer
-                await self.send_peer_list_to_peer(peer)
-                
-                self.logger.info(f"Connected to peer {host}:{port}")
+                await self.broadcast_peer_list()
                 return True
-            else:
-                self.logger.error(f"Failed to connect to peer {host}:{port}")
-                return False
+                
         except Exception as e:
             self.logger.error(f"Error connecting to peer {host}:{port}: {e}")
-            return False
+            if peer:
+                await peer.disconnect()
+                
+        return False
 
     def get_connected_peers(self) -> List[PeerInfo]:
         """Return a list of connected peers."""
