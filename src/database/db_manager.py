@@ -34,7 +34,7 @@ class DatabaseManager:
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS peers (
                         id TEXT PRIMARY KEY,
-                        host TEXT NOT NULL,
+                        address TEXT NOT NULL,
                         port INTEGER NOT NULL,
                         username TEXT,
                         last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
