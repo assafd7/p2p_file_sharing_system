@@ -359,6 +359,11 @@ class DHT:
             # Initialize routing table
             self.routing_table = {}
 
+            # Create local peer and start listening
+            self.local_peer = Peer(self.host, self.port, self.node_id)
+            asyncio.create_task(self.local_peer.start_listening())
+            self.logger.info(f"Local peer started listening on {self.host}:{self.port}")
+
             # Start periodic cleanup
             asyncio.create_task(self._periodic_cleanup())
 

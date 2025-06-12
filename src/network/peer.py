@@ -198,24 +198,58 @@ class Peer:
         self.message_handlers[message_type] = handler
 
     async def start_listening(self):
-        """Start listening for messages from the peer."""
-        while self.is_connected:
-            try:
-                message = await self.receive_message()
-                if message is None:
+        """Start listening for incoming connections."""
+        try:
+            # Create server socket
+            server = await asyncio.start_server(
+                self._handle_connection,
+                self.host,
+                self.port
+            )
+            
+            self.logger.info(f"Started listening on {self.host}:{self.port}")
+            
+            # Keep the server running
+            async with server:
+                await server.serve_forever()
+                
+        except Exception as e:
+            self.logger.error(f"Error starting server: {e}")
+            raise
+
+    async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        """Handle an incoming connection."""
+        try:
+            # Get peer address
+            peer_addr = writer.get_extra_info('peername')
+            self.logger.info(f"New connection from {peer_addr[0]}:{peer_addr[1]}")
+            
+            # Store reader and writer
+            self.reader = reader
+            self.writer = writer
+            self.is_connected = True
+            
+            # Start message handling loop
+            while self.is_connected:
+                try:
+                    message = await self.receive_message()
+                    if message is None:
+                        break
+                        
+                    # Handle message
+                    if message.type in self.message_handlers:
+                        await self.message_handlers[message.type](message)
+                    else:
+                        self.logger.warning(f"No handler for message type: {message.type}")
+                        
+                except Exception as e:
+                    self.logger.error(f"Error handling message: {e}")
                     break
                     
-                handler = self.message_handlers.get(message.type)
-                if handler:
-                    await handler(message)
-                else:
-                    self.logger.warning(f"No handler registered for message type: {message.type}")
-                    
-            except Exception as e:
-                self.logger.error(f"Error in message handling: {e}")
-                break
-                
-        await self.disconnect()
+        except Exception as e:
+            self.logger.error(f"Error handling connection: {e}")
+        finally:
+            await self.disconnect()
 
     async def ping(self) -> bool:
         """Send a PING message and wait for PONG response."""
