@@ -380,11 +380,13 @@ class DHT:
             # Create new peer
             peer = Peer(host, port, is_local=False)
             
+            # Register message handlers before connecting
+            peer.register_handler(MessageType.PEER_LIST, self.handle_peer_list)
+            peer.register_handler(MessageType.HEARTBEAT, self.handle_heartbeat)
+            
             # Try to connect
             if await peer.connect():
                 self.peers[peer.peer_id] = peer
-                # Register message handlers
-                peer.register_handler(MessageType.PEER_LIST, self.handle_peer_list)
                 
                 # Send our peer list to the new peer
                 await self.broadcast_peer_list()
@@ -415,27 +417,36 @@ class DHT:
     async def start(self):
         """Start the DHT network."""
         try:
-            self.logger.info("Starting DHT network")
-
-            # Initialize routing table
-            self.routing_table = {}
-
-            # Create local peer and start listening on all interfaces
-            self.local_peer = Peer("0.0.0.0", self.port, self.node_id, is_local=True)
-            asyncio.create_task(self.local_peer.start_listening())
-            self.logger.info(f"Local peer started listening on 0.0.0.0:{self.port}")
-
-            # Start periodic cleanup
-            asyncio.create_task(self._periodic_cleanup())
-
-            # Start periodic peer health checks
-            asyncio.create_task(self._periodic_health_check())
-
+            # Start local peer
+            if not self.local_peer.is_connected:
+                await self.local_peer.start_listening()
+                
+            # Register message handlers
+            self.local_peer.register_handler(MessageType.PEER_LIST, self.handle_peer_list)
+            self.local_peer.register_handler(MessageType.HEARTBEAT, self.handle_heartbeat)
+            
+            # Connect to bootstrap nodes
+            for node in self.bootstrap_nodes:
+                try:
+                    await self.connect_to_peer(node['host'], node['port'])
+                except Exception as e:
+                    self.logger.error(f"Error connecting to bootstrap node {node['host']}:{node['port']}: {e}")
+                    
             self.logger.info("DHT network started successfully")
-            return True
+            
         except Exception as e:
-            self.logger.error(f"Failed to start DHT network: {e}")
-            return False
+            self.logger.error(f"Error starting DHT network: {e}")
+            raise
+
+    async def handle_heartbeat(self, message: Message):
+        """Handle incoming heartbeat message."""
+        try:
+            # Update last activity time for the peer
+            peer_id = message.sender_id
+            if peer_id in self.peers:
+                self.peers[peer_id].last_activity = asyncio.get_event_loop().time()
+        except Exception as e:
+            self.logger.error(f"Error handling heartbeat: {e}")
 
     async def _periodic_cleanup(self):
         """Periodically clean up old nodes and merge buckets."""

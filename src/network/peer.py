@@ -142,61 +142,56 @@ class Peer:
 
     async def start_listening(self):
         """Start listening for incoming connections."""
-        if not self.is_local:
-            self.logger.debug("Not starting server for non-local peer")
+        if self.is_connected:
             return
-
+            
         try:
-            # Create server socket
-            server = await asyncio.start_server(
+            # Create server
+            self.server = await asyncio.start_server(
                 self._handle_connection,
                 self.host,
                 self.port
             )
             
-            self.logger.info(f"Started listening on {self.host}:{self.port}")
-            
-            # Keep the server running
-            async with server:
-                await server.serve_forever()
+            # Start serving
+            async with self.server:
+                self.is_connected = True
+                logger.info(f"Started listening on {self.host}:{self.port}")
+                await self.server.serve_forever()
                 
         except Exception as e:
-            self.logger.error(f"Error starting server: {e}")
+            logger.error(f"Error starting server: {e}")
+            self.is_connected = False
             raise
 
     async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        """Handle an incoming connection."""
+        """Handle a new connection."""
         try:
-            # Get peer address
-            peer_addr = writer.get_extra_info('peername')
-            self.logger.info(f"New connection from {peer_addr[0]}:{peer_addr[1]}")
+            # Create message reader and writer
+            msg_reader = MessageReader(reader)
+            msg_writer = MessageWriter(writer)
             
-            # Store reader and writer
-            self.reader = MessageReader(reader)
-            self.writer = MessageWriter(writer)
-            self.is_connected = True
-            
-            # Start message handling loop
-            while self.is_connected:
-                try:
-                    message = await self.reader.read_message()
-                    if message is None:
-                        break
-                        
-                    # Handle message
-                    if message.type in self.message_handlers:
-                        await self.message_handlers[message.type](message)
-                    else:
-                        self.logger.warning(f"No handler for message type: {message.type}")
-                        
-                except Exception as e:
-                    self.logger.error(f"Error handling message: {e}")
+            # Process messages
+            while True:
+                message = await msg_reader.read_message()
+                if message is None:
                     break
                     
+                # Handle message
+                handler = self.message_handlers.get(message.type)
+                if handler:
+                    try:
+                        await handler(message)
+                    except Exception as e:
+                        logger.error(f"Error handling message from {writer.get_extra_info('peername')}: {e}")
+                else:
+                    logger.warning(f"No handler registered for message type {message.type}")
+                    
         except Exception as e:
-            self.logger.error(f"Error handling connection: {e}")
+            logger.error(f"Error handling connection: {e}")
         finally:
-            await self.disconnect()
+            writer.close()
+            await writer.wait_closed()
 
     async def ping(self) -> bool:
         """Send a PING message and wait for PONG response."""
@@ -225,7 +220,7 @@ class Peer:
         self.known_peers = {p for p in self.known_peers if p.id != peer_id} 
 
     async def _process_messages(self):
-        """Process incoming messages from the peer."""
+        """Process incoming messages."""
         if not self.reader:
             return
             
@@ -241,12 +236,12 @@ class Peer:
                     try:
                         await handler(message)
                     except Exception as e:
-                        self.logger.error(f"Error handling message from {self.host}:{self.host}: {e}")
+                        logger.error(f"Error handling message from {self.host}:{self.port}: {e}")
                 else:
-                    self.logger.warning(f"No handler registered for message type {message.type}")
+                    logger.warning(f"No handler registered for message type {message.type}")
                     
         except Exception as e:
-            self.logger.error(f"Error processing messages from {self.host}:{self.port}: {e}")
+            logger.error(f"Error processing messages from {self.host}:{self.port}: {e}")
         finally:
             await self.disconnect()
 
