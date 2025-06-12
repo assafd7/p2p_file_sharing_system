@@ -101,7 +101,12 @@ class DHT:
         """Handle incoming peer list message."""
         try:
             peers = message.payload.get('peers', [])
-            self.logger.debug(f"Received peer list with {len(peers)} peers from {peer.peer_id}")
+            self.logger.debug(f"Received peer list with {len(peers)} peers from {getattr(peer, 'peer_id', 'unknown')}")
+            
+            # Defensive: check if self._local_peer is set
+            if self._local_peer is None:
+                self.logger.error("Local peer is not initialized (self._local_peer is None)")
+                return
             
             # Process each peer in the list
             for peer_info in peers:
@@ -109,17 +114,13 @@ class DHT:
                     # Skip if it's our own peer info
                     if peer_info['id'] == self._local_peer.peer_id:
                         continue
-                        
                     # Skip if we already know this peer
                     if peer_info['id'] in self.peers:
                         continue
-                        
                     # Connect to the new peer
                     await self.connect_to_peer(peer_info['address'], peer_info['port'])
-                    
                 except Exception as e:
                     self.logger.warning(f"Failed to process peer {peer_info.get('id')}: {e}")
-                    
         except Exception as e:
             self.logger.error(f"Error handling peer list: {e}")
             
