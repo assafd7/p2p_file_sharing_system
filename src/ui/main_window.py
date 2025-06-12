@@ -94,13 +94,13 @@ class MainWindow(QMainWindow):
         # Setup menu bar
         self.setup_menu_bar()
 
-        # Setup periodic updates
+        # Setup update timer
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.update_ui)
         self.update_timer.start(1000)  # Update every second
-
+        
         # Initial UI update
-        self.update_ui()
+        QTimer.singleShot(0, self.update_ui)
 
     def setup_files_tab(self):
         """Setup the files tab with file list and controls."""
@@ -506,49 +506,33 @@ class MainWindow(QMainWindow):
             # Update transfer list
             self.update_transfer_list()
             
-            # Update peer list using asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(self.update_peer_list())
-            else:
-                asyncio.run(self.update_peer_list())
+            # Update peer list
+            self.update_peer_list()
                 
         except Exception as e:
             self.logger.error(f"Error updating UI: {e}")
 
-    async def update_file_list(self):
-        """Update the file list display."""
-        self.logger.debug("Updating file list...")
-        self.file_list.clear()
-        
+    def update_file_list(self):
+        """Update the file list in the UI."""
         try:
-            files = await self.file_manager.get_shared_files_async()
-            self.logger.debug(f"Retrieved {len(files)} files from file manager")
+            self.file_list.clear()
+            files = self.file_manager.get_shared_files()
             
-            if not files:
-                self.logger.debug("No files found in storage")
-                return
-            
-            for file_info in files:
-                item = QTreeWidgetItem(self.file_list)
-                item.setText(0, file_info.name)
-                item.setText(1, self.format_size(file_info.size))
-                item.setText(2, file_info.owner_id)
-                item.setData(0, Qt.ItemDataRole.UserRole, file_info)
+            for file in files:
+                item = QTreeWidgetItem([
+                    file['name'],
+                    str(file['size']),
+                    file['type'],
+                    file['status']
+                ])
+                self.file_list.addTopLevelItem(item)
                 
-            self.logger.debug("File list updated successfully")
-            
+            # Resize columns to content
+            for i in range(self.file_list.columnCount()):
+                self.file_list.resizeColumnToContents(i)
+                
         except Exception as e:
             self.logger.error(f"Error updating file list: {e}")
-            self.show_error(f"Error updating file list: {str(e)}")
-
-    def format_size(self, size_bytes):
-        """Format file size in human-readable format."""
-        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-            if size_bytes < 1024.0:
-                return f"{size_bytes:.1f} {unit}"
-            size_bytes /= 1024.0
-        return f"{size_bytes:.1f} PB"
 
     def update_transfer_list(self):
         """Update the transfer list display."""
@@ -559,7 +543,7 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, transfer_info)
             self.transfer_list.addItem(item)
 
-    async def update_peer_list(self):
+    def update_peer_list(self):
         """Update the peer list with current peers."""
         try:
             self.peer_list.clear()
@@ -567,7 +551,7 @@ class MainWindow(QMainWindow):
             
             for peer in peers:
                 # Get peer info from database
-                peer_info = await self.db_manager.get_peer(peer.id)
+                peer_info = self.db_manager.get_peer_sync(peer.id)
                 username = peer_info.get('username', 'Unknown') if peer_info else 'Unknown'
                 
                 # Create peer list item
@@ -590,12 +574,7 @@ class MainWindow(QMainWindow):
         """Handle peer connection event."""
         try:
             self.logger.info(f"Peer connected: {peer.id}")
-            # Update peer list using asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(self.update_peer_list())
-            else:
-                asyncio.run(self.update_peer_list())
+            self.update_peer_list()
         except Exception as e:
             self.logger.error(f"Error handling peer connection: {e}")
 
@@ -603,12 +582,7 @@ class MainWindow(QMainWindow):
         """Handle peer disconnection event."""
         try:
             self.logger.info(f"Peer disconnected: {peer.id}")
-            # Update peer list using asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(self.update_peer_list())
-            else:
-                asyncio.run(self.update_peer_list())
+            self.update_peer_list()
         except Exception as e:
             self.logger.error(f"Error handling peer disconnection: {e}")
 

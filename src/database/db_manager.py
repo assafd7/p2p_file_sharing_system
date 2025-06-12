@@ -118,6 +118,29 @@ class DatabaseManager:
                     return dict(row)
                 return None
 
+    def get_peer_sync(self, peer_id: str) -> Optional[Dict]:
+        """Get peer information synchronously."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM peers WHERE peer_id = ?",
+                    (peer_id,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        'peer_id': row[0],
+                        'host': row[1],
+                        'port': row[2],
+                        'username': row[3],
+                        'last_seen': row[4]
+                    }
+                return None
+        except Exception as e:
+            self.logger.error(f"Error getting peer info: {e}")
+            return None
+
     async def update_peer_status(self, peer_id: str, is_connected: bool):
         """Update peer connection status."""
         async with aiosqlite.connect(self.db_path) as db:
