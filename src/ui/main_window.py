@@ -547,53 +547,59 @@ class MainWindow(QMainWindow):
             self.transfer_list.addItem(item)
 
     def update_peer_list(self):
-        """Update the peer list with current peers."""
+        """Update the peer list display."""
         try:
+            self.logger.info("Starting peer list update")
             self.peer_list.clear()
+            
+            # Get connected peers
             peers = self.network_manager.get_connected_peers()
+            self.logger.info(f"Found {len(peers)} connected peers")
             
             for peer in peers:
                 try:
                     # Get peer info from database
                     peer_info = self.db_manager.get_peer_sync(peer.id)
-                    username = peer_info.get('username', 'Unknown') if peer_info else 'Unknown'
+                    self.logger.info(f"Retrieved peer info for {peer.id}: {peer_info}")
                     
-                    # Create peer list item
-                    item = QTreeWidgetItem([
-                        username,
-                        peer.address,
-                        str(peer.port),
-                        "Connected"
-                    ])
-                    self.peer_list.addTopLevelItem(item)
+                    if peer_info:
+                        username = peer_info.get('username', 'Unknown')
+                        self.logger.info(f"Using username from database: {username}")
+                    else:
+                        username = peer.username if hasattr(peer, 'username') else 'Unknown'
+                        self.logger.info(f"Using username from peer object: {username}")
+                    
+                    # Add peer to list
+                    item = QListWidgetItem()
+                    item.setText(f"{username} ({peer.id})")
+                    self.peer_list.addItem(item)
+                    self.logger.info(f"Added peer to list: {username} ({peer.id})")
                 except Exception as e:
-                    self.logger.error(f"Error adding peer to list: {e}")
-                    continue
-                
-            # Resize columns to content
-            for i in range(self.peer_list.columnCount()):
-                self.peer_list.resizeColumnToContents(i)
-                
+                    self.logger.error(f"Error adding peer {peer.id} to list: {e}")
+            
+            # Resize columns to fit content
+            self.peer_list.resizeColumnsToContents()
+            self.logger.info("Completed peer list update")
         except Exception as e:
             self.logger.error(f"Error updating peer list: {e}")
 
     def on_peer_connected(self, peer):
-        """Handle peer connection event."""
-        try:
-            self.logger.info(f"Peer connected: {peer.id}")
-            # Schedule UI update in the main thread
-            QTimer.singleShot(0, self.update_peer_list)
-        except Exception as e:
-            self.logger.error(f"Error handling peer connection: {e}")
+        """Handle peer connection."""
+        self.logger.info(f"Peer connected: {peer.id}")
+        # Schedule UI update in the main thread
+        QTimer.singleShot(0, self.update_peer_list)
 
     def on_peer_disconnected(self, peer):
-        """Handle peer disconnection event."""
-        try:
-            self.logger.info(f"Peer disconnected: {peer.id}")
-            # Schedule UI update in the main thread
-            QTimer.singleShot(0, self.update_peer_list)
-        except Exception as e:
-            self.logger.error(f"Error handling peer disconnection: {e}")
+        """Handle peer disconnection."""
+        self.logger.info(f"Peer disconnected: {peer.id}")
+        # Schedule UI update in the main thread
+        QTimer.singleShot(0, self.update_peer_list)
+
+    def on_peer_updated(self, peer):
+        """Handle peer update."""
+        self.logger.info(f"Peer updated: {peer.id}")
+        # Schedule UI update in the main thread
+        QTimer.singleShot(0, self.update_peer_list)
 
     def cleanup(self):
         """Clean up resources before closing."""

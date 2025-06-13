@@ -220,12 +220,20 @@ class DHT:
                 self.logger.info(f"Received username from peer {peer.id}: {username}")
                 # Update peer's username in database if db_manager is available
                 if self.db_manager:
-                    await self.db_manager.update_peer_username(peer.id, username)
+                    try:
+                        await self.db_manager.update_peer_username(peer.id, username)
+                        self.logger.info(f"Successfully updated username in database for peer {peer.id}")
+                    except Exception as e:
+                        self.logger.error(f"Database error updating username: {e}")
                 # Update peer object
                 peer.username = username
+                self.logger.info(f"Updated peer object username to: {username}")
                 # Notify UI
                 if hasattr(self, 'on_peer_updated'):
+                    self.logger.info("Notifying UI of peer update")
                     self.on_peer_updated(peer)
+            else:
+                self.logger.warning(f"Received user info message without username from peer {peer.id}")
         except Exception as e:
             self.logger.error(f"Error handling user info: {e}")
 
@@ -322,6 +330,7 @@ class DHT:
             
             # Send our username
             try:
+                self.logger.info(f"Sending username '{self.username}' to peer {peer_id}")
                 await self.send_message(
                     Message(
                         type=MessageType.USER_INFO,
@@ -330,6 +339,7 @@ class DHT:
                     ),
                     peer
                 )
+                self.logger.info(f"Successfully sent username to peer {peer_id}")
             except Exception as e:
                 self.logger.error(f"Error sending initial message to peer {peer_id}: {e}")
                 await self._handle_peer_disconnect(peer)
@@ -337,6 +347,7 @@ class DHT:
             
             # Notify UI
             if hasattr(self, 'on_peer_connected'):
+                self.logger.info(f"Notifying UI of new peer connection: {peer_id}")
                 self.on_peer_connected(peer)
                 
             return peer
