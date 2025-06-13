@@ -159,36 +159,33 @@ class MainWindow(QMainWindow):
         return transfers_tab
 
     def setup_peers_tab(self):
-        """Setup the peers tab with peer list and controls."""
+        """Set up the peers tab."""
         peers_tab = QWidget()
         layout = QVBoxLayout()
         
         # Create peer list
         self.peer_list = QTreeWidget()
         self.peer_list.setHeaderLabels(["Username", "Address", "Port", "Status"])
-        self.peer_list.setColumnWidth(0, 150)  # Username column
-        self.peer_list.setColumnWidth(1, 150)  # Address column
-        self.peer_list.setColumnWidth(2, 80)   # Port column
-        self.peer_list.setColumnWidth(3, 100)  # Status column
+        self.peer_list.setColumnCount(4)
         layout.addWidget(self.peer_list)
         
-        # Create button layout
+        # Create buttons
         button_layout = QHBoxLayout()
         
         # Connect button
-        self.connect_button = QPushButton("Connect to Peer")
-        self.connect_button.clicked.connect(self.connect_to_peer)
-        button_layout.addWidget(self.connect_button)
+        connect_btn = QPushButton("Connect to Peer")
+        connect_btn.clicked.connect(self.connect_to_peer)
+        button_layout.addWidget(connect_btn)
         
         # Disconnect button
-        self.disconnect_button = QPushButton("Disconnect")
-        self.disconnect_button.clicked.connect(self.disconnect_from_peer)
-        button_layout.addWidget(self.disconnect_button)
+        disconnect_btn = QPushButton("Disconnect")
+        disconnect_btn.clicked.connect(self.disconnect_from_peer)
+        button_layout.addWidget(disconnect_btn)
         
         # Refresh button
-        self.refresh_button = QPushButton("Refresh")
-        self.refresh_button.clicked.connect(self.update_peer_list)
-        button_layout.addWidget(self.refresh_button)
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self.update_peer_list)
+        button_layout.addWidget(refresh_btn)
         
         layout.addLayout(button_layout)
         peers_tab.setLayout(layout)
@@ -570,15 +567,20 @@ class MainWindow(QMainWindow):
                         self.logger.info(f"Using username from peer object: {username}")
                     
                     # Add peer to list
-                    item = QListWidgetItem()
-                    item.setText(f"{username} ({peer.id})")
-                    self.peer_list.addItem(item)
+                    item = QTreeWidgetItem([
+                        username,
+                        peer.address,
+                        str(peer.port),
+                        "Connected"
+                    ])
+                    self.peer_list.addTopLevelItem(item)
                     self.logger.info(f"Added peer to list: {username} ({peer.id})")
                 except Exception as e:
                     self.logger.error(f"Error adding peer {peer.id} to list: {e}")
             
             # Resize columns to fit content
-            self.peer_list.resizeColumnsToContents()
+            for i in range(self.peer_list.columnCount()):
+                self.peer_list.resizeColumnToContents(i)
             self.logger.info("Completed peer list update")
         except Exception as e:
             self.logger.error(f"Error updating peer list: {e}")
