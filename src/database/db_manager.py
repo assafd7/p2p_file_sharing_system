@@ -249,9 +249,12 @@ class DatabaseManager:
         """Get peer information synchronously."""
         try:
             with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT * FROM peers WHERE id = ?",
+                cursor = conn.execute(
+                    """
+                    SELECT id, address, port, username, is_connected, last_seen
+                    FROM peers
+                    WHERE id = ?
+                    """,
                     (peer_id,)
                 )
                 row = cursor.fetchone()
@@ -261,11 +264,12 @@ class DatabaseManager:
                         'host': row[1],
                         'port': row[2],
                         'username': row[3],
-                        'last_seen': row[4]
+                        'is_connected': bool(row[4]),
+                        'last_seen': row[5]
                     }
                 return None
         except Exception as e:
-            self.logger.error(f"Error getting peer info: {e}")
+            self.logger.error(f"Error getting peer: {e}")
             return None
 
     async def update_peer_status(self, peer_id: str, is_connected: bool):
