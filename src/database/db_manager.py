@@ -104,14 +104,12 @@ class DatabaseManager:
 
     def get_connection(self):
         """Get a database connection."""
-        try:
-            if self._connection is None:
-                self._connection = sqlite3.connect(self.db_path)
-                self._connection.row_factory = sqlite3.Row
-            return self._connection
-        except Exception as e:
-            self.logger.error(f"Error getting database connection: {e}")
-            raise
+        conn = sqlite3.connect(self.db_path)
+        # Enable foreign keys
+        conn.execute("PRAGMA foreign_keys = ON")
+        # Set timezone to local time
+        conn.execute("PRAGMA timezone = 'localtime'")
+        return conn
 
     def close(self):
         """Close the database connection."""
@@ -251,7 +249,8 @@ class DatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.execute(
                     """
-                    SELECT id, address, port, username, is_connected, last_seen
+                    SELECT id, address, port, username, is_connected,
+                           datetime(last_seen, 'localtime') as last_seen
                     FROM peers
                     WHERE id = ?
                     """,
@@ -304,7 +303,7 @@ class DatabaseManager:
                         UPDATE peers 
                         SET username = ?,
                             is_connected = 1,
-                            last_seen = CURRENT_TIMESTAMP
+                            last_seen = datetime('now', 'localtime')
                         WHERE id = ?
                         """,
                         (username, peer_id)
@@ -316,7 +315,7 @@ class DatabaseManager:
                         INSERT INTO peers (
                             id, address, port, username, 
                             is_connected, last_seen
-                        ) VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+                        ) VALUES (?, ?, ?, ?, 1, datetime('now', 'localtime'))
                         """,
                         (peer_id, address, port, username)
                     )
