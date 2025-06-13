@@ -219,14 +219,31 @@ class DatabaseManager:
             await db.commit()
 
     async def get_peer(self, peer_id: str) -> Optional[Dict]:
-        """Get peer information from the database."""
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = sqlite3.Row
-            async with db.execute('SELECT * FROM peers WHERE id = ?', (peer_id,)) as cursor:
-                row = await cursor.fetchone()
+        """Get peer information."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute(
+                    """
+                    SELECT id, address, port, username, is_connected, last_seen
+                    FROM peers
+                    WHERE id = ?
+                    """,
+                    (peer_id,)
+                )
+                row = cursor.fetchone()
                 if row:
-                    return dict(row)
+                    return {
+                        'id': row[0],
+                        'address': row[1],
+                        'port': row[2],
+                        'username': row[3],
+                        'is_connected': bool(row[4]),
+                        'last_seen': row[5]
+                    }
                 return None
+        except Exception as e:
+            self.logger.error(f"Error getting peer: {e}")
+            return None
 
     def get_peer_sync(self, peer_id: str) -> Optional[Dict]:
         """Get peer information synchronously."""
@@ -281,9 +298,9 @@ class DatabaseManager:
                     conn.execute(
                         """
                         UPDATE peers 
-                        SET username = ?, 
-                            last_seen = CURRENT_TIMESTAMP,
-                            is_connected = 1 
+                        SET username = ?,
+                            is_connected = 1,
+                            last_seen = CURRENT_TIMESTAMP
                         WHERE id = ?
                         """,
                         (username, peer_id)
