@@ -25,13 +25,13 @@ class DatabaseManager:
             # Add username column if it doesn't exist
             if 'username' not in columns:
                 self.logger.info("Adding username column to peers table")
-                conn.execute("ALTER TABLE peers ADD COLUMN username TEXT DEFAULT 'Unknown'")
+                conn.execute("ALTER TABLE peers ADD COLUMN username TEXT")
                 conn.commit()
             
             # Add is_connected column if it doesn't exist
             if 'is_connected' not in columns:
                 self.logger.info("Adding is_connected column to peers table")
-                conn.execute("ALTER TABLE peers ADD COLUMN is_connected BOOLEAN NOT NULL DEFAULT 1")
+                conn.execute("ALTER TABLE peers ADD COLUMN is_connected BOOLEAN DEFAULT 1")
                 conn.commit()
             
             # Check if address column exists (replacing host)
@@ -43,10 +43,10 @@ class DatabaseManager:
                     CREATE TABLE peers_new (
                         id TEXT PRIMARY KEY,
                         address TEXT NOT NULL,
-                        port INTEGER NOT NULL DEFAULT 8000,
-                        username TEXT DEFAULT 'Unknown',
-                        is_connected BOOLEAN NOT NULL DEFAULT 1,
-                        last_seen TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                        port INTEGER NOT NULL,
+                        username TEXT,
+                        is_connected BOOLEAN DEFAULT 1,
+                        last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
                 # 2. Copy data from old table to new table
@@ -63,15 +63,15 @@ class DatabaseManager:
     def _create_tables(self):
         """Create necessary database tables if they don't exist."""
         with self.get_connection() as conn:
-            # Create peers table with explicit NOT NULL constraints and defaults
+            # Create peers table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS peers (
                     id TEXT PRIMARY KEY,
                     address TEXT NOT NULL,
-                    port INTEGER NOT NULL DEFAULT 8000,
-                    username TEXT DEFAULT 'Unknown',
-                    is_connected BOOLEAN NOT NULL DEFAULT 1,
-                    last_seen TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    port INTEGER NOT NULL,
+                    username TEXT,
+                    is_connected BOOLEAN DEFAULT 1,
+                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
@@ -82,8 +82,8 @@ class DatabaseManager:
                     name TEXT NOT NULL,
                     size INTEGER NOT NULL,
                     owner_id TEXT NOT NULL,
-                    shared BOOLEAN NOT NULL DEFAULT 0,
-                    last_seen TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    shared BOOLEAN DEFAULT 0,
+                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (owner_id) REFERENCES peers(id)
                 )
             """)
@@ -91,9 +91,9 @@ class DatabaseManager:
             # Create file_peers table for tracking which peers have which files
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS file_peers (
-                    file_hash TEXT NOT NULL,
-                    peer_id TEXT NOT NULL,
-                    last_seen TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    file_hash TEXT,
+                    peer_id TEXT,
+                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (file_hash, peer_id),
                     FOREIGN KEY (file_hash) REFERENCES files(hash),
                     FOREIGN KEY (peer_id) REFERENCES peers(id)
@@ -282,20 +282,19 @@ class DatabaseManager:
                         """
                         UPDATE peers 
                         SET username = ?, 
-                            last_seen = CURRENT_TIMESTAMP, 
-                            is_connected = 1,
-                            address = ?,
-                            port = ?
+                            last_seen = CURRENT_TIMESTAMP,
+                            is_connected = 1 
                         WHERE id = ?
                         """,
-                        (username, address, port, peer_id)
+                        (username, peer_id)
                     )
                 else:
                     # Insert new peer
                     conn.execute(
                         """
                         INSERT INTO peers (
-                            id, address, port, username, is_connected, last_seen
+                            id, address, port, username, 
+                            is_connected, last_seen
                         ) VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
                         """,
                         (peer_id, address, port, username)
