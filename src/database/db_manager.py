@@ -271,13 +271,16 @@ class DatabaseManager:
                 if peer:
                     # Update existing peer
                     conn.execute(
-                        "UPDATE peers SET username = ? WHERE id = ?",
+                        "UPDATE peers SET username = ?, last_seen = CURRENT_TIMESTAMP WHERE id = ?",
                         (username, peer_id)
                     )
                 else:
                     # Insert new peer
                     conn.execute(
-                        "INSERT INTO peers (id, address, port, username) VALUES (?, ?, ?, ?)",
+                        """
+                        INSERT INTO peers (id, address, port, username, last_seen) 
+                        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        """,
                         (peer_id, address, port, username)
                     )
                 conn.commit()
