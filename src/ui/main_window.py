@@ -172,20 +172,17 @@ class MainWindow(QMainWindow):
         # Create buttons
         button_layout = QHBoxLayout()
         
-        # Connect button
-        connect_btn = QPushButton("Connect to Peer")
-        connect_btn.clicked.connect(self.connect_to_peer)
-        button_layout.addWidget(connect_btn)
+        connect_button = QPushButton("Connect to Peer")
+        connect_button.clicked.connect(self.connect_to_peer)
+        button_layout.addWidget(connect_button)
         
-        # Disconnect button
-        disconnect_btn = QPushButton("Disconnect")
-        disconnect_btn.clicked.connect(self.disconnect_from_peer)
-        button_layout.addWidget(disconnect_btn)
+        disconnect_button = QPushButton("Disconnect")
+        disconnect_button.clicked.connect(self.disconnect_from_peer)
+        button_layout.addWidget(disconnect_button)
         
-        # Refresh button
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.clicked.connect(self.update_peer_list)
-        button_layout.addWidget(refresh_btn)
+        refresh_button = QPushButton("Refresh")
+        refresh_button.clicked.connect(self.update_peer_list)
+        button_layout.addWidget(refresh_button)
         
         layout.addLayout(button_layout)
         peers_tab.setLayout(layout)
