@@ -7,32 +7,34 @@ import aiosqlite
 from pathlib import Path
 
 class DatabaseManager:
-    def __init__(self, db_path: str):
-        """Initialize database manager."""
+    def __init__(self, db_path: str = "p2p_network.db"):
+        """Initialize the database manager."""
         self.db_path = db_path
         self.logger = logging.getLogger(__name__)
         self._connection = None
-        self._initialize_db()
+        self._create_tables()
+        self._migrate_database()
 
-    def _initialize_db(self):
-        """Initialize database tables."""
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                
-                # Create users table
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS users (
-                        user_id TEXT PRIMARY KEY,
-                        username TEXT UNIQUE NOT NULL,
-                        password_hash TEXT NOT NULL,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-                
-                # Create peers table
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS peers (
+    def _migrate_database(self):
+        """Handle database migrations."""
+        with self.get_connection() as conn:
+            # Check if username column exists in peers table
+            cursor = conn.execute("PRAGMA table_info(peers)")
+            columns = {row[1] for row in cursor.fetchall()}
+            
+            # Add username column if it doesn't exist
+            if 'username' not in columns:
+                self.logger.info("Adding username column to peers table")
+                conn.execute("ALTER TABLE peers ADD COLUMN username TEXT")
+                conn.commit()
+            
+            # Check if address column exists (replacing host)
+            if 'address' not in columns and 'host' in columns:
+                self.logger.info("Renaming host column to address in peers table")
+                # SQLite doesn't support column renaming directly, so we need to:
+                # 1. Create a new table with the correct schema
+                conn.execute("""
+                    CREATE TABLE peers_new (
                         id TEXT PRIMARY KEY,
                         address TEXT NOT NULL,
                         port INTEGER NOT NULL,
@@ -40,27 +42,57 @@ class DatabaseManager:
                         last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
-                
-                # Create files table
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS files (
-                        file_id TEXT PRIMARY KEY,
-                        name TEXT NOT NULL,
-                        size INTEGER NOT NULL,
-                        type TEXT NOT NULL,
-                        owner_id TEXT NOT NULL,
-                        status TEXT NOT NULL,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (owner_id) REFERENCES users(user_id)
-                    )
+                # 2. Copy data from old table to new table
+                conn.execute("""
+                    INSERT INTO peers_new (id, address, port, username, last_seen)
+                    SELECT id, host, port, username, last_seen FROM peers
                 """)
-                
+                # 3. Drop old table
+                conn.execute("DROP TABLE peers")
+                # 4. Rename new table to original name
+                conn.execute("ALTER TABLE peers_new RENAME TO peers")
                 conn.commit()
-                self.logger.info("Database initialized successfully")
-                
-        except Exception as e:
-            self.logger.error(f"Error initializing database: {e}")
-            raise
+
+    def _create_tables(self):
+        """Create necessary database tables if they don't exist."""
+        with self.get_connection() as conn:
+            # Create peers table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS peers (
+                    id TEXT PRIMARY KEY,
+                    address TEXT NOT NULL,
+                    port INTEGER NOT NULL,
+                    username TEXT,
+                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Create files table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS files (
+                    hash TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    size INTEGER NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    shared BOOLEAN DEFAULT 0,
+                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (owner_id) REFERENCES peers(id)
+                )
+            """)
+            
+            # Create file_peers table for tracking which peers have which files
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS file_peers (
+                    file_hash TEXT,
+                    peer_id TEXT,
+                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (file_hash, peer_id),
+                    FOREIGN KEY (file_hash) REFERENCES files(hash),
+                    FOREIGN KEY (peer_id) REFERENCES peers(id)
+                )
+            """)
+            
+            conn.commit()
 
     def get_connection(self):
         """Get a database connection."""
