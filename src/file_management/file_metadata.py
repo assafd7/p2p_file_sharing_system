@@ -54,11 +54,38 @@ class FileMetadata:
 class FileMetadataManager:
     """Manages file metadata in the P2P network."""
     
-    def __init__(self):
+    def __init__(self, storage_dir: str = "data/metadata"):
         self.logger = logging.getLogger(__name__)
         self._metadata: Dict[str, FileMetadata] = {}  # file_id -> metadata
         self._lock = asyncio.Lock()  # Lock for thread-safe operations
         self._seen_metadata: Set[str] = set()  # Set of seen metadata IDs
+        self.storage_dir = Path(storage_dir)
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+        self._load_metadata()  # Load existing metadata on startup
+    
+    def _load_metadata(self):
+        """Load metadata from disk."""
+        try:
+            metadata_file = self.storage_dir / "metadata.json"
+            if metadata_file.exists():
+                with open(metadata_file, 'r') as f:
+                    data = json.load(f)
+                    for file_id, metadata_dict in data.items():
+                        self._metadata[file_id] = FileMetadata.from_dict(metadata_dict)
+                self.logger.info(f"Loaded {len(self._metadata)} metadata entries from disk")
+        except Exception as e:
+            self.logger.error(f"Error loading metadata: {e}")
+    
+    def _save_metadata(self):
+        """Save metadata to disk."""
+        try:
+            metadata_file = self.storage_dir / "metadata.json"
+            data = {file_id: metadata.to_dict() for file_id, metadata in self._metadata.items()}
+            with open(metadata_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            self.logger.debug("Metadata saved to disk")
+        except Exception as e:
+            self.logger.error(f"Error saving metadata: {e}")
     
     async def add_metadata(self, metadata: FileMetadata) -> bool:
         """Add new file metadata."""
@@ -68,10 +95,12 @@ class FileMetadataManager:
                 existing = self._metadata[metadata.file_id]
                 if metadata.upload_time > existing.upload_time:
                     self._metadata[metadata.file_id] = metadata
+                    self._save_metadata()
                     return True
                 return False
             else:
                 self._metadata[metadata.file_id] = metadata
+                self._save_metadata()
                 return True
     
     async def get_metadata(self, file_id: str) -> Optional[FileMetadata]:
@@ -89,6 +118,7 @@ class FileMetadataManager:
         async with self._lock:
             if file_id in self._metadata:
                 del self._metadata[file_id]
+                self._save_metadata()
                 return True
             return False
     
