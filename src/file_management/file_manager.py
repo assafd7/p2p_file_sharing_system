@@ -55,7 +55,7 @@ class FileManager:
         self.dht = dht
         self.logger = logging.getLogger("FileManager")
         self.active_transfers: Dict[str, FileTransfer] = {}
-        self.metadata_manager = FileMetadataManager(storage_dir=str(self.storage_dir / "metadata"))
+        self.metadata_manager = FileMetadataManager()
         
         # Create directories if they don't exist
         self.storage_dir.mkdir(parents=True, exist_ok=True)
