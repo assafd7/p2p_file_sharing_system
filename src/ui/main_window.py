@@ -621,10 +621,19 @@ class MainWindow(QMainWindow):
                 files = await self.file_manager.get_shared_files()
                 self.file_list.clear()
                 for file_info in files:
-                    item = QListWidgetItem()
-                    item.setText(f"{file_info['name']} ({self.format_size(file_info['size'])})")
-                    item.setData(Qt.ItemDataRole.UserRole, file_info)
-                    self.file_list.addItem(item)
+                    item = QTreeWidgetItem([
+                        file_info['name'],
+                        self.format_size(file_info['size']),
+                        file_info['owner_name'],
+                        "Available" if file_info['is_available'] else "Unavailable"
+                    ])
+                    item.setData(0, Qt.ItemDataRole.UserRole, file_info)
+                    self.file_list.addTopLevelItem(item)
+                
+                # Resize columns to fit content
+                for i in range(self.file_list.columnCount()):
+                    self.file_list.resizeColumnToContents(i)
+                    
             except Exception as e:
                 self.logger.error(f"Error updating file list: {e}")
         
