@@ -8,6 +8,7 @@ import logging
 from .protocol import Message, MessageType
 from .peer import Peer, PeerInfo
 from src.database.db_manager import DatabaseManager
+from src.file_management.file_metadata import FileMetadata
 
 class DHTError(Exception):
     """Base exception class for DHT-related errors."""
