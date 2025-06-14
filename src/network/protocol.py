@@ -44,8 +44,10 @@ class Message:
         """Create a message from serialized data."""
         try:
             json_data = json.loads(data.decode())
+            # Convert string type to MessageType enum
+            msg_type = MessageType(json_data['type'])
             return cls(
-                type=MessageType(json_data['type']),
+                type=msg_type,
                 sender_id=json_data.get('sender_id'),
                 payload=json_data.get('payload', {})
             )
@@ -58,7 +60,7 @@ class Message:
         """Serialize the message to bytes."""
         try:
             data = {
-                'type': self.type.value,
+                'type': self.type.value,  # Use the enum value
                 'sender_id': self.sender_id,
                 'payload': self.payload,
                 'timestamp': self.timestamp
