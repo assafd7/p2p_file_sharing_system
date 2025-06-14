@@ -689,6 +689,7 @@ class DHT:
                     break
                     
                 length = int.from_bytes(length_data, 'big')
+                self.logger.debug(f"Received message of length {length} from peer {peer.id}")
                 
                 # Read message data
                 data = await peer.reader.read(length)
@@ -698,10 +699,13 @@ class DHT:
                     
                 # Parse message
                 message = Message.deserialize(data)
+                self.logger.debug(f"Received message of type {message.type} from peer {peer.id}")
                 
                 # Handle message
                 if message.type in self.message_handlers:
+                    self.logger.debug(f"Handling message of type {message.type} from peer {peer.id}")
                     await self.message_handlers[message.type](message, peer)
+                    self.logger.debug(f"Finished handling message of type {message.type} from peer {peer.id}")
                 else:
                     self.logger.warning(f"No handler for message type: {message.type}")
                     
@@ -712,6 +716,7 @@ class DHT:
         finally:
             # Only clean up if the peer is still in our list
             if peer.id in self.peers:
+                self.logger.debug(f"Cleaning up connection for peer {peer.id}")
                 await self._handle_peer_disconnect(peer)
 
     async def _handle_peer_disconnect(self, peer: Peer):
@@ -785,6 +790,7 @@ class DHT:
             
             # Parse metadata
             metadata = FileMetadata.from_dict(message.payload)
+            self.logger.debug(f"Parsed metadata for file: {metadata.name} (ID: {metadata.file_id})")
             
             # Check if we've seen this metadata before
             if await self.has_seen_metadata(metadata):
@@ -793,17 +799,21 @@ class DHT:
                 
             # Mark metadata as seen
             await self.mark_metadata_seen(metadata, peer.id)
+            self.logger.debug(f"Marked metadata as seen for file {metadata.name}")
             
             # Store metadata
             await self.add_metadata(metadata)
+            self.logger.debug(f"Stored metadata for file {metadata.name}")
             
             # Notify UI if callback exists
             if hasattr(self, 'on_file_metadata_received'):
+                self.logger.debug(f"Notifying UI about new file: {metadata.name}")
                 self.on_file_metadata_received(metadata)
             
             # Forward to other peers if TTL > 0
             if metadata.ttl > 0:
                 metadata.ttl -= 1
+                self.logger.debug(f"Forwarding metadata for file {metadata.name} (TTL: {metadata.ttl})")
                 for other_peer in self.get_connected_peers():
                     if other_peer.id != peer.id:
                         try:
@@ -816,6 +826,8 @@ class DHT:
                             self.logger.debug(f"Forwarded file metadata to peer {other_peer.id}")
                         except Exception as e:
                             self.logger.error(f"Error forwarding file metadata to peer {other_peer.id}: {e}")
+            else:
+                self.logger.debug(f"Not forwarding metadata for file {metadata.name} (TTL expired)")
                             
         except Exception as e:
             self.logger.error(f"Error handling file metadata: {e}")
