@@ -112,6 +112,11 @@ class P2PFileSharingApp:
                 db_manager=self.db_manager  # Pass database manager to DHT
             )
             self.logger.debug("DHT initialized")
+            
+            # Set file manager in DHT
+            self.dht.set_file_manager(self.file_manager)
+            self.logger.debug("File protocol initialized")
+            
         except Exception as e:
             self.logger.error(f"Error initializing components: {e}")
             raise

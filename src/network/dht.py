@@ -8,6 +8,7 @@ import logging
 from .protocol import Message, MessageType
 from .peer import Peer, PeerInfo
 from src.database.db_manager import DatabaseManager
+from .file_protocol import FileProtocol
 
 class DHTError(Exception):
     """Base exception class for DHT-related errors."""
@@ -65,13 +66,17 @@ class DHT:
         self._running = False
         self._lock = asyncio.Lock()
         self._cleanup_task = None
+        self.file_protocol = None  # Will be set when file manager is available
         
         # Initialize message handlers
         self.message_handlers = {
             MessageType.PEER_LIST: self._handle_peer_list,
             MessageType.HEARTBEAT: self._handle_heartbeat,
             MessageType.GOODBYE: self._handle_goodbye,
-            MessageType.USER_INFO: self._handle_user_info
+            MessageType.USER_INFO: self._handle_user_info,
+            MessageType.FILE_LIST: self._handle_file_list,
+            MessageType.FILE_REQUEST: self._handle_file_request,
+            MessageType.FILE_RESPONSE: self._handle_file_response
         }
         
     @property
@@ -743,3 +748,42 @@ class DHT:
             self.logger.error(f"Error sending message to peer {peer.id}: {e}")
             await self._handle_peer_disconnect(peer)
             raise
+
+    def set_file_manager(self, file_manager):
+        """Set the file manager and initialize file protocol."""
+        self.file_protocol = FileProtocol(file_manager)
+
+    async def _handle_file_list(self, message: Message, peer: Peer):
+        """Handle file list message."""
+        if not self.file_protocol:
+            self.logger.error("File protocol not initialized")
+            return
+        
+        try:
+            await self.file_protocol.handle_file_list_request(message, peer)
+        except Exception as e:
+            self.logger.error(f"Error handling file list: {e}")
+
+    async def _handle_file_request(self, message: Message, peer: Peer):
+        """Handle file request message."""
+        if not self.file_protocol:
+            self.logger.error("File protocol not initialized")
+            return
+        
+        try:
+            await self.file_protocol.handle_file_request(message, peer)
+        except Exception as e:
+            self.logger.error(f"Error handling file request: {e}")
+
+    async def _handle_file_response(self, message: Message, peer: Peer):
+        """Handle file response message."""
+        if not self.file_protocol:
+            self.logger.error("File protocol not initialized")
+            return
+        
+        try:
+            # This is handled by the file protocol's request_file_chunk method
+            # which waits for the response
+            pass
+        except Exception as e:
+            self.logger.error(f"Error handling file response: {e}")
