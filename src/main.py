@@ -90,16 +90,6 @@ class P2PFileSharingApp:
             self.db_manager = DatabaseManager(DB_PATH)
             self.logger.debug("Database manager initialized")
             
-            # Initialize file manager
-            self.file_manager = FileManager(
-                storage_dir=FILES_DIR,
-                temp_dir=TEMP_DIR,
-                cache_dir=CACHE_DIR,
-                db_manager=self.db_manager,
-                dht=self.dht  # Add DHT instance
-            )
-            self.logger.debug("File manager initialized")
-            
             # Get local IP address
             local_ip = self.get_local_ip()
             self.logger.info(f"Local IP address: {local_ip}")
@@ -113,6 +103,17 @@ class P2PFileSharingApp:
                 db_manager=self.db_manager  # Pass database manager to DHT
             )
             self.logger.debug("DHT initialized")
+            
+            # Initialize file manager with DHT
+            self.file_manager = FileManager(
+                storage_dir=FILES_DIR,
+                temp_dir=TEMP_DIR,
+                cache_dir=CACHE_DIR,
+                db_manager=self.db_manager,
+                dht=self.dht  # Pass DHT instance to FileManager
+            )
+            self.logger.debug("File manager initialized")
+            
         except Exception as e:
             self.logger.error(f"Error initializing components: {e}")
             raise
