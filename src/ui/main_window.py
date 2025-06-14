@@ -608,8 +608,8 @@ class MainWindow(QMainWindow):
             self.logger.error(f"Error updating UI: {e}")
 
     def update_file_list(self):
-        """Update the file list with current shared files"""
-        logger.debug("Updating file list")
+        """Update the file list display."""
+        self.logger.debug("Updating file list")
         self.file_list.clear()
         
         # Create a timer to handle async operation
@@ -618,45 +618,30 @@ class MainWindow(QMainWindow):
         
         async def update_files():
             try:
-                logger.debug("Fetching shared files")
                 files = await self.file_manager.get_shared_files()
-                logger.debug(f"Retrieved {len(files)} shared files")
-                
+                self.file_list.clear()
                 for file_info in files:
-                    try:
-                        logger.debug(f"Adding file to list: {file_info}")
-                        item = QTreeWidgetItem([
-                            file_info['name'],
-                            self.format_size(file_info['size']),
-                            file_info['owner_name'],
-                            'Available' if file_info['is_available'] else 'Unavailable'
-                        ])
-                        # Store file info in the first column's user data
-                        item.setData(0, Qt.UserRole, file_info)
-                        self.file_list.addTopLevelItem(item)
-                    except Exception as e:
-                        logger.error(f"Error adding file to list: {e}")
+                    item = QTreeWidgetItem([
+                        file_info['name'],
+                        self.format_size(file_info['size']),
+                        file_info['owner_name'],
+                        "Available" if file_info['is_available'] else "Unavailable"
+                    ])
+                    item.setData(0, Qt.ItemDataRole.UserRole, file_info)
+                    self.file_list.addTopLevelItem(item)
                 
                 # Resize columns to fit content
                 for i in range(self.file_list.columnCount()):
                     self.file_list.resizeColumnToContents(i)
-                
-                logger.debug("File list update completed")
+                    
             except Exception as e:
-                logger.error(f"Error updating file list: {e}")
+                self.logger.error(f"Error updating file list: {e}")
         
         def on_timeout():
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            
-            future = asyncio.run_coroutine_threadsafe(update_files(), loop)
-            future.add_done_callback(lambda f: timer.deleteLater())
+            asyncio.create_task(update_files())
         
         timer.timeout.connect(on_timeout)
-        timer.start(0)
+        timer.start(0)  # Start immediately
 
     def format_size(self, size: int) -> str:
         """Format file size in human-readable format."""

@@ -95,7 +95,8 @@ class P2PFileSharingApp:
                 storage_dir=FILES_DIR,
                 temp_dir=TEMP_DIR,
                 cache_dir=CACHE_DIR,
-                db_manager=self.db_manager
+                db_manager=self.db_manager,
+                dht=self.dht  # Add DHT instance
             )
             self.logger.debug("File manager initialized")
             
