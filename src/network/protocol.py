@@ -12,16 +12,16 @@ class MessageType(Enum):
     HELLO = "hello"
     PING = "PING"
     PONG = "PONG"
-    FILE_LIST = "FILE_LIST"  # List of available files
-    FILE_REQUEST = "file_request"  # Request to download a file
-    FILE_RESPONSE = "file_response"  # File data response
-    FILE_CHUNK = "file_chunk"  # File chunk data
-    FILE_COMPLETE = "file_complete"  # File transfer complete
-    FILE_ERROR = "file_error"  # File transfer error
+    FILE_LIST = "FILE_LIST"
+    FILE_REQUEST = "file_request"
+    FILE_RESPONSE = "file_response"
     PEER_LIST = "peer_list"
     GOODBYE = "goodbye"
     HEARTBEAT = "heartbeat"
-    USER_INFO = "user_info"  # Username exchange
+    USER_INFO = "user_info"
+    FILE_METADATA = "file_metadata"  # New message type for file metadata
+    FILE_METADATA_REQUEST = "file_metadata_request"  # Request file metadata
+    FILE_METADATA_RESPONSE = "file_metadata_response"  # Response with file metadata
 
 @dataclass
 class Message:
@@ -70,6 +70,33 @@ class Message:
     def create(cls, msg_type: MessageType, sender_id: str, payload: Optional[Dict] = None) -> 'Message':
         """Create a new message."""
         return cls(type=msg_type, sender_id=sender_id, payload=payload)
+
+    @classmethod
+    def create_file_metadata(cls, sender_id: str, metadata: Dict) -> 'Message':
+        """Create a file metadata message."""
+        return cls(
+            type=MessageType.FILE_METADATA,
+            sender_id=sender_id,
+            payload={'metadata': metadata}
+        )
+
+    @classmethod
+    def create_file_metadata_request(cls, sender_id: str, file_id: str) -> 'Message':
+        """Create a file metadata request message."""
+        return cls(
+            type=MessageType.FILE_METADATA_REQUEST,
+            sender_id=sender_id,
+            payload={'file_id': file_id}
+        )
+
+    @classmethod
+    def create_file_metadata_response(cls, sender_id: str, metadata: Dict) -> 'Message':
+        """Create a file metadata response message."""
+        return cls(
+            type=MessageType.FILE_METADATA_RESPONSE,
+            sender_id=sender_id,
+            payload={'metadata': metadata}
+        )
 
 class ProtocolError(Exception):
     """Base class for protocol-related errors."""

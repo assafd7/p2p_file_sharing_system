@@ -1,7 +1,7 @@
 import os
 import hashlib
 import json
-from typing import Dict, List, Optional, Tuple, Callable
+from typing import Dict, List, Optional, Tuple, Callable, Set
 from dataclasses import dataclass
 from datetime import datetime
 import logging
@@ -12,6 +12,7 @@ import shutil
 
 from src.database.db_manager import DatabaseManager
 from src.file_management.file_transfer import FileTransfer
+from .file_metadata import FileMetadata
 
 @dataclass
 class FileChunk:
@@ -38,25 +39,151 @@ class FileManagerError(Exception):
     pass
 
 class FileManager:
-    """Manages file operations in the P2P file sharing system."""
+    """Manages file metadata and transfers."""
 
     # Constants
     CHUNK_SIZE = 1024 * 1024  # 1MB chunks
 
-    def __init__(self, storage_dir: str, temp_dir: str, cache_dir: str,
-                 db_manager: DatabaseManager):
-        self.storage_dir = Path(storage_dir)
-        self.temp_dir = Path(temp_dir)
-        self.cache_dir = Path(cache_dir)
+    def __init__(self, storage_dir: Path, temp_dir: Path, cache_dir: Path, db_manager: DatabaseManager):
+        """Initialize the file manager."""
+        self.storage_dir = storage_dir
+        self.temp_dir = temp_dir
+        self.cache_dir = cache_dir
         self.db_manager = db_manager
-        self.logger = logging.getLogger("FileManager")
-        self.active_transfers: Dict[str, FileTransfer] = {}
+        self.logger = logging.getLogger(__name__)
         
         # Create directories if they don't exist
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-    
+        
+        # In-memory storage for file metadata
+        self.file_metadata: Dict[str, FileMetadata] = {}
+        # Set of seen metadata to prevent duplicates
+        self.seen_metadata: Set[str] = set()
+        # Active transfers
+        self.active_transfers: Dict[str, Dict] = {}
+
+    async def add_file(self, file_path: str, owner_id: str, owner_name: str) -> FileMetadata:
+        """Add a new file to the system."""
+        try:
+            # Create metadata
+            metadata = FileMetadata.create_from_file(file_path, owner_id, owner_name)
+            
+            # Store metadata
+            self.file_metadata[metadata.file_id] = metadata
+            self.seen_metadata.add(metadata.file_id)
+            
+            # Store in database
+            await self.db_manager.store_file_metadata(metadata)
+            
+            self.logger.info(f"Added file: {metadata.name} (ID: {metadata.file_id})")
+            return metadata
+            
+        except Exception as e:
+            self.logger.error(f"Error adding file: {e}")
+            raise
+
+    async def remove_file(self, file_id: str) -> bool:
+        """Remove a file from the system."""
+        try:
+            if file_id in self.file_metadata:
+                metadata = self.file_metadata[file_id]
+                
+                # Remove from memory
+                del self.file_metadata[file_id]
+                self.seen_metadata.discard(file_id)
+                
+                # Remove from database
+                await self.db_manager.remove_file_metadata(file_id)
+                
+                self.logger.info(f"Removed file: {metadata.name} (ID: {file_id})")
+                return True
+                
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"Error removing file: {e}")
+            raise
+
+    async def get_file_metadata(self, file_id: str) -> Optional[FileMetadata]:
+        """Get metadata for a file."""
+        return self.file_metadata.get(file_id)
+
+    async def get_all_files(self) -> List[FileMetadata]:
+        """Get all file metadata."""
+        return list(self.file_metadata.values())
+
+    async def get_files_by_owner(self, owner_id: str) -> List[FileMetadata]:
+        """Get all files owned by a specific peer."""
+        return [
+            metadata for metadata in self.file_metadata.values()
+            if metadata.owner_id == owner_id
+        ]
+
+    async def has_seen_metadata(self, metadata: FileMetadata) -> bool:
+        """Check if we've seen this metadata before."""
+        return metadata.file_id in self.seen_metadata
+
+    async def store_metadata(self, metadata: FileMetadata) -> bool:
+        """Store received metadata."""
+        try:
+            if not await self.has_seen_metadata(metadata):
+                self.file_metadata[metadata.file_id] = metadata
+                self.seen_metadata.add(metadata.file_id)
+                await self.db_manager.store_file_metadata(metadata)
+                return True
+            return False
+        except Exception as e:
+            self.logger.error(f"Error storing metadata: {e}")
+            return False
+
+    async def start_transfer(self, file_id: str, peer_id: str, is_download: bool) -> str:
+        """Start a file transfer."""
+        transfer_id = hashlib.sha256(
+            f"{file_id}{peer_id}{datetime.now().timestamp()}".encode()
+        ).hexdigest()
+        
+        self.active_transfers[transfer_id] = {
+            'file_id': file_id,
+            'peer_id': peer_id,
+            'is_download': is_download,
+            'progress': 0.0,
+            'status': 'starting',
+            'start_time': datetime.now()
+        }
+        
+        return transfer_id
+
+    async def update_transfer(self, transfer_id: str, progress: float, status: str):
+        """Update transfer status."""
+        if transfer_id in self.active_transfers:
+            self.active_transfers[transfer_id].update({
+                'progress': progress,
+                'status': status
+            })
+
+    async def get_transfer_status(self, transfer_id: str) -> Optional[tuple]:
+        """Get transfer status."""
+        if transfer_id in self.active_transfers:
+            transfer = self.active_transfers[transfer_id]
+            return transfer['progress'], transfer['status']
+        return None
+
+    async def cleanup_transfer(self, transfer_id: str):
+        """Clean up a completed transfer."""
+        if transfer_id in self.active_transfers:
+            del self.active_transfers[transfer_id]
+
+    async def cleanup(self):
+        """Clean up resources."""
+        # Clean up temporary files
+        for file in self.temp_dir.glob('*'):
+            try:
+                file.unlink()
+            except Exception as e:
+                self.logger.error(f"Error cleaning up temp file {file}: {e}")
+
     def add_file(self, file_path: str, owner_id: str) -> Optional[FileMetadata]:
         """Add a file to the system.
         
@@ -268,7 +395,7 @@ class FileManager:
         except Exception as e:
             self.logger.error(f"Error getting shared files: {e}")
             return []
-    
+
     def get_active_transfers(self) -> List[FileTransfer]:
         """Get list of active transfers.
         

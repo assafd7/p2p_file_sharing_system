@@ -16,7 +16,6 @@ import asyncio
 from src.file_management.file_manager import FileManager
 from src.network.dht import DHT
 from src.database.db_manager import DatabaseManager
-from src.file_management.file_sharing_manager import FileSharingManager
 
 class TransferWorker(QThread):
     progress_updated = pyqtSignal(str, float, str)  # transfer_id, progress, status
@@ -56,13 +55,6 @@ class MainWindow(QMainWindow):
         self.username = username
         self.logger = logging.getLogger(__name__)
         self.transfer_workers: Dict[str, TransferWorker] = {}
-        
-        # Initialize file sharing manager
-        self.file_sharing_manager = FileSharingManager(
-            dht=network_manager,
-            db_manager=db_manager,
-            storage_dir=Path("data/files")
-        )
 
         # Set window properties
         self.setWindowTitle("P2P File Sharing System")
@@ -288,7 +280,7 @@ class MainWindow(QMainWindow):
             self.delete_file(file_info=file_info)
 
     def share_file(self):
-        """Share a file with the network."""
+        """Handle file sharing."""
         try:
             # Open file dialog
             file_path, _ = QFileDialog.getOpenFileName(
@@ -301,27 +293,35 @@ class MainWindow(QMainWindow):
             if not file_path:
                 return
                 
-            # Share file
-            async def share():
+            # Create metadata
+            async def verify_and_update():
                 try:
-                    metadata = await self.file_sharing_manager.share_file(file_path)
-                    if metadata:
-                        self.show_info(f"Successfully shared file: {metadata.name}")
-                        self.update_file_list()
-                    else:
-                        self.show_error("Failed to share file")
+                    metadata = await self.file_manager.add_file(
+                        file_path,
+                        self.user_id,
+                        self.username
+                    )
+                    
+                    # Broadcast metadata
+                    await self.network_manager.broadcast_file_metadata(metadata)
+                    
+                    # Update UI
+                    self.update_file_list()
+                    self.show_info(f"Successfully shared file: {metadata.name}")
+                    
                 except Exception as e:
                     self.logger.error(f"Error sharing file: {e}")
-                    self.show_error(f"Error sharing file: {str(e)}")
-                    
-            asyncio.create_task(share())
+                    self.show_error(f"Failed to share file: {str(e)}")
+            
+            # Run async operation
+            asyncio.create_task(verify_and_update())
             
         except Exception as e:
             self.logger.error(f"Error in share_file: {e}")
             self.show_error(f"Error sharing file: {str(e)}")
-            
+
     def download_file(self):
-        """Download a selected file."""
+        """Handle file download."""
         try:
             # Get selected item
             selected_items = self.file_list.selectedItems()
@@ -332,38 +332,50 @@ class MainWindow(QMainWindow):
             item = selected_items[0]
             file_id = item.data(0, Qt.ItemDataRole.UserRole)
             
-            # Get target directory
-            target_dir = QFileDialog.getExistingDirectory(
-                self,
-                "Select Download Directory",
-                "",
-                QFileDialog.Option.ShowDirsOnly
-            )
-            
-            if not target_dir:
+            if not file_id:
+                self.show_error("Invalid file selection")
                 return
                 
-            # Download file
-            async def download():
+            # Get file metadata
+            async def start_download():
                 try:
-                    success = await self.file_sharing_manager.download_file(file_id, target_dir)
-                    if success:
-                        self.show_info("File download started")
-                        self.update_transfer_list()
-                    else:
-                        self.show_error("Failed to start download")
-                except Exception as e:
-                    self.logger.error(f"Error downloading file: {e}")
-                    self.show_error(f"Error downloading file: {str(e)}")
+                    metadata = await self.file_manager.get_file_metadata(file_id)
+                    if not metadata:
+                        self.show_error("File metadata not found")
+                        return
+                        
+                    # Start transfer
+                    transfer_id = await self.file_manager.start_transfer(
+                        file_id,
+                        metadata.owner_id,
+                        True  # is_download
+                    )
                     
-            asyncio.create_task(download())
+                    # Create transfer worker
+                    worker = TransferWorker(transfer_id, self.file_manager)
+                    worker.progress_updated.connect(self.update_transfer_progress)
+                    worker.transfer_completed.connect(self.on_transfer_completed)
+                    worker.start()
+                    
+                    self.transfer_workers[transfer_id] = worker
+                    
+                    # Update UI
+                    self.update_transfer_list()
+                    self.show_info(f"Started downloading: {metadata.name}")
+                    
+                except Exception as e:
+                    self.logger.error(f"Error starting download: {e}")
+                    self.show_error(f"Failed to start download: {str(e)}")
+            
+            # Run async operation
+            asyncio.create_task(start_download())
             
         except Exception as e:
             self.logger.error(f"Error in download_file: {e}")
             self.show_error(f"Error downloading file: {str(e)}")
-            
+
     def delete_file(self, item=None, file_info=None):
-        """Delete a shared file."""
+        """Handle file deletion."""
         try:
             # Get file info
             if not item and not file_info:
@@ -372,15 +384,22 @@ class MainWindow(QMainWindow):
                     self.show_warning("Please select a file to delete")
                     return
                 item = selected_items[0]
-                file_id = item.data(0, Qt.ItemDataRole.UserRole)
-            else:
-                file_id = file_info.file_id
+                file_info = item.data(0, Qt.ItemDataRole.UserRole)
+            
+            if not file_info:
+                self.show_error("Invalid file selection")
+                return
+                
+            # Verify ownership
+            if file_info.owner_id != self.user_id:
+                self.show_error("You can only delete your own files")
+                return
                 
             # Confirm deletion
             reply = QMessageBox.question(
                 self,
                 "Confirm Deletion",
-                "Are you sure you want to delete this file?",
+                f"Are you sure you want to delete {file_info.name}?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
             
@@ -388,53 +407,26 @@ class MainWindow(QMainWindow):
                 return
                 
             # Delete file
-            async def delete():
+            async def perform_deletion():
                 try:
-                    success = await self.file_sharing_manager.delete_file(file_id)
+                    success = await self.file_manager.remove_file(file_info.file_id)
                     if success:
-                        self.show_info("File deleted successfully")
+                        # Update UI
                         self.update_file_list()
+                        self.show_info(f"Successfully deleted file: {file_info.name}")
                     else:
                         self.show_error("Failed to delete file")
+                        
                 except Exception as e:
                     self.logger.error(f"Error deleting file: {e}")
-                    self.show_error(f"Error deleting file: {str(e)}")
-                    
-            asyncio.create_task(delete())
+                    self.show_error(f"Failed to delete file: {str(e)}")
+            
+            # Run async operation
+            asyncio.create_task(perform_deletion())
             
         except Exception as e:
             self.logger.error(f"Error in delete_file: {e}")
             self.show_error(f"Error deleting file: {str(e)}")
-            
-    def update_file_list(self):
-        """Update the file list with current shared files."""
-        try:
-            self.file_list.clear()
-            
-            # Get shared files
-            files = self.file_sharing_manager.get_shared_files()
-            
-            # Add files to list
-            for metadata in files:
-                item = QTreeWidgetItem([
-                    metadata.name,
-                    self._format_size(metadata.size),
-                    metadata.owner_id,
-                    "Available"
-                ])
-                item.setData(0, Qt.ItemDataRole.UserRole, metadata.file_id)
-                self.file_list.addTopLevelItem(item)
-                
-        except Exception as e:
-            self.logger.error(f"Error updating file list: {e}")
-            
-    def _format_size(self, size: int) -> str:
-        """Format file size in human-readable format."""
-        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-            if size < 1024:
-                return f"{size:.1f} {unit}"
-            size /= 1024
-        return f"{size:.1f} PB"
 
     def pause_transfer(self):
         """Pause a selected transfer."""
@@ -559,6 +551,42 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.logger.error(f"Error updating UI: {e}")
 
+    def update_file_list(self):
+        """Update the file list display."""
+        try:
+            self.file_list.clear()
+            
+            async def fetch_files():
+                try:
+                    files = await self.file_manager.get_all_files()
+                    
+                    for metadata in files:
+                        item = QTreeWidgetItem([
+                            metadata.name,
+                            self.format_size(metadata.size),
+                            metadata.owner_name,
+                            "Available" if metadata.is_available else "Unavailable"
+                        ])
+                        item.setData(0, Qt.ItemDataRole.UserRole, metadata)
+                        self.file_list.addTopLevelItem(item)
+                        
+                except Exception as e:
+                    self.logger.error(f"Error fetching files: {e}")
+            
+            # Run async operation
+            asyncio.create_task(fetch_files())
+            
+        except Exception as e:
+            self.logger.error(f"Error updating file list: {e}")
+
+    def format_size(self, size: int) -> str:
+        """Format file size in human-readable format."""
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size < 1024:
+                return f"{size:.1f} {unit}"
+            size /= 1024
+        return f"{size:.1f} PB"
+
     def update_transfer_list(self):
         """Update the transfer list display."""
         self.transfer_list.clear()
@@ -680,7 +708,12 @@ class MainWindow(QMainWindow):
         # Implementation of save_settings method
         pass
 
-    def save_settings(self):
-        """Save application settings."""
-        # Implementation of save_settings method
+    def update_transfer_progress(self, transfer_id, progress, status):
+        """Handle transfer progress update."""
+        # Implementation of update_transfer_progress method
+        pass
+
+    def on_transfer_completed(self, transfer_id, success):
+        """Handle transfer completion."""
+        # Implementation of on_transfer_completed method
         pass 
