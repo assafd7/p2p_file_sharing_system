@@ -20,7 +20,7 @@ class MessageType(Enum):
     HEARTBEAT = "heartbeat"
     USER_INFO = "user_info"
     FILE_METADATA = "file_metadata"  # New message type for file metadata
-    FILE_METADATA_REQUEST = "file_metadata_request"  # Request file metadata
+    FILE_METADATA_REQUEST = "file_metadata_request"  # Request for file metadata
     FILE_METADATA_RESPONSE = "file_metadata_response"  # Response with file metadata
 
 @dataclass
@@ -36,6 +36,7 @@ class Message:
         self.type = msg_type or type
         self.sender_id = sender_id
         self.payload = payload or {}
+        self.timestamp = time.time()  # Add timestamp for message ordering
         self.logger = logging.getLogger(__name__)
 
     @classmethod
@@ -59,7 +60,8 @@ class Message:
             data = {
                 'type': self.type.value,
                 'sender_id': self.sender_id,
-                'payload': self.payload
+                'payload': self.payload,
+                'timestamp': self.timestamp
             }
             return json.dumps(data).encode()
         except Exception as e:
@@ -71,32 +73,13 @@ class Message:
         """Create a new message."""
         return cls(type=msg_type, sender_id=sender_id, payload=payload)
 
-    @classmethod
-    def create_file_metadata(cls, sender_id: str, metadata: Dict) -> 'Message':
-        """Create a file metadata message."""
-        return cls(
-            type=MessageType.FILE_METADATA,
-            sender_id=sender_id,
-            payload={'metadata': metadata}
-        )
-
-    @classmethod
-    def create_file_metadata_request(cls, sender_id: str, file_id: str) -> 'Message':
-        """Create a file metadata request message."""
-        return cls(
-            type=MessageType.FILE_METADATA_REQUEST,
-            sender_id=sender_id,
-            payload={'file_id': file_id}
-        )
-
-    @classmethod
-    def create_file_metadata_response(cls, sender_id: str, metadata: Dict) -> 'Message':
-        """Create a file metadata response message."""
-        return cls(
-            type=MessageType.FILE_METADATA_RESPONSE,
-            sender_id=sender_id,
-            payload={'metadata': metadata}
-        )
+    def is_file_metadata_message(self) -> bool:
+        """Check if this is a file metadata related message."""
+        return self.type in [
+            MessageType.FILE_METADATA,
+            MessageType.FILE_METADATA_REQUEST,
+            MessageType.FILE_METADATA_RESPONSE
+        ]
 
 class ProtocolError(Exception):
     """Base class for protocol-related errors."""

@@ -2,7 +2,8 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QStatusBar, QMessageBox,
     QFileDialog, QProgressBar, QMenu, QSystemTrayIcon,
-    QTabWidget, QTreeWidget, QTreeWidgetItem, QListWidgetItem, QInputDialog, QLineEdit
+    QTabWidget, QTreeWidget, QTreeWidgetItem, QListWidgetItem, QInputDialog, QLineEdit,
+    QListWidget, QProgressDialog, QSplitter, QFrame
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
 from PyQt6.QtGui import QIcon, QAction
@@ -282,7 +283,7 @@ class MainWindow(QMainWindow):
     def share_file(self):
         """Handle file sharing."""
         try:
-            # Open file dialog
+            # Get file path from user
             file_path, _ = QFileDialog.getOpenFileName(
                 self,
                 "Select File to Share",
@@ -292,114 +293,139 @@ class MainWindow(QMainWindow):
             
             if not file_path:
                 return
-                
-            # Create metadata
-            async def verify_and_update():
+            
+            # Show progress dialog
+            progress = QProgressDialog("Adding file...", "Cancel", 0, 0, self)
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+            progress.setAutoClose(True)
+            progress.show()
+            
+            # Create timer for async operation
+            timer = QTimer()
+            timer.setSingleShot(True)
+            
+            async def add_file():
                 try:
-                    # Create a new event loop for this operation
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
+                    # Add file to manager
+                    await self.file_manager.add_file(
+                        file_path=file_path,
+                        owner_id=self.user_id,
+                        owner_name=self.username
+                    )
                     
-                    try:
-                        # Call the async add_file method with all required parameters
-                        metadata = await self.file_manager.add_file(
-                            file_path,
-                            self.user_id,
-                            self.username
-                        )
-                        
-                        # Broadcast metadata
-                        await self.network_manager.broadcast_file_metadata(metadata)
-                
-                        # Update UI in main thread
-                        def update_ui():
-                            self.update_file_list()
-                            self.show_info(f"Successfully shared file: {metadata.name}")
-                        
-                        QTimer.singleShot(0, update_ui)
-                        
-                    finally:
-                        loop.close()
-                
-                except Exception as error:
-                    error_msg = str(error)
-                    self.logger.error(f"Error sharing file: {error_msg}")
+                    # Update file list
+                    self.update_file_list()
                     
-                    def show_error():
-                        self.show_error(f"Failed to share file: {error_msg}")
-                    QTimer.singleShot(0, show_error)
+                    # Show success message
+                    QMessageBox.information(
+                        self,
+                        "Success",
+                        "File shared successfully!"
+                    )
+                except Exception as e:
+                    self.logger.error(f"Error sharing file: {e}")
+                    QMessageBox.critical(
+                        self,
+                        "Error",
+                        f"Failed to share file: {str(e)}"
+                    )
+                finally:
+                    progress.close()
             
-            # Run the async operation
-            asyncio.run(verify_and_update())
+            def on_timeout():
+                asyncio.create_task(add_file())
             
-        except Exception as error:
-            error_msg = str(error)
-            self.logger.error(f"Error in share_file: {error_msg}")
-            self.show_error(f"Error sharing file: {error_msg}")
+            timer.timeout.connect(on_timeout)
+            timer.start(0)  # Start immediately
+            
+        except Exception as e:
+            self.logger.error(f"Error in share_file: {e}")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to share file: {str(e)}"
+            )
 
     def download_file(self):
         """Handle file download."""
         try:
-            # Get selected item
+            # Get selected file
             selected_items = self.file_list.selectedItems()
             if not selected_items:
-                self.show_warning("Please select a file to download")
+                QMessageBox.warning(
+                    self,
+                    "Warning",
+                    "Please select a file to download"
+                )
                 return
-
-            item = selected_items[0]
-            file_id = item.data(0, Qt.ItemDataRole.UserRole)
             
-            if not file_id:
-                self.show_error("Invalid file selection")
-            return
-
-            # Get file metadata
-            async def start_download():
+            file_info = selected_items[0].data(Qt.ItemDataRole.UserRole)
+            
+            # Get save location
+            save_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save File",
+                file_info['name'],
+                "All Files (*.*)"
+            )
+            
+            if not save_path:
+                return
+            
+            # Show progress dialog
+            progress = QProgressDialog("Downloading file...", "Cancel", 0, 100, self)
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+            progress.setAutoClose(True)
+            progress.show()
+            
+            # Create timer for async operation
+            timer = QTimer()
+            timer.setSingleShot(True)
+            
+            async def download():
                 try:
-                    metadata = await self.file_manager.get_file_metadata(file_id)
-                    if not metadata:
-                        def show_error():
-                            self.show_error("File metadata not found")
-                        QTimer.singleShot(0, show_error)
-                        return
-                        
-                    # Start transfer
-                    transfer_id = await self.file_manager.start_transfer(
-                        file_id,
-                        metadata.owner_id,
-                        True  # is_download
+                    # Start download
+                    transfer = await self.file_manager.start_file_transfer(
+                        file_info['file_id'],
+                        save_path
                     )
                     
-                    # Create transfer worker
-                    def create_worker():
-                        worker = TransferWorker(transfer_id, self.file_manager)
-                        worker.progress_updated.connect(self.update_transfer_progress)
-                        worker.transfer_completed.connect(self.on_transfer_completed)
-                        worker.start()
-                        self.transfer_workers[transfer_id] = worker
-                        
-                        # Update UI
-                        self.update_transfer_list()
-                        self.show_info(f"Started downloading: {metadata.name}")
+                    # Update progress
+                    while not transfer.is_complete:
+                        progress.setValue(int(transfer.progress * 100))
+                        await asyncio.sleep(0.1)
                     
-                    QTimer.singleShot(0, create_worker)
+                    progress.setValue(100)
                     
+                    # Show success message
+                    QMessageBox.information(
+                        self,
+                        "Success",
+                        "File downloaded successfully!"
+                    )
                 except Exception as e:
-                    self.logger.error(f"Error starting download: {e}")
-                    def show_error():
-                        self.show_error(f"Failed to start download: {str(e)}")
-                    QTimer.singleShot(0, show_error)
+                    self.logger.error(f"Error downloading file: {e}")
+                    QMessageBox.critical(
+                        self,
+                        "Error",
+                        f"Failed to download file: {str(e)}"
+                    )
+                finally:
+                    progress.close()
             
-            # Get the event loop and run the async operation
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(start_download())
-            else:
-                loop.run_until_complete(start_download())
+            def on_timeout():
+                asyncio.create_task(download())
+            
+            timer.timeout.connect(on_timeout)
+            timer.start(0)  # Start immediately
             
         except Exception as e:
             self.logger.error(f"Error in download_file: {e}")
-            self.show_error(f"Error downloading file: {str(e)}")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to download file: {str(e)}"
+            )
 
     def delete_file(self, item=None, file_info=None):
         """Handle file deletion."""
@@ -407,62 +433,52 @@ class MainWindow(QMainWindow):
             # Get file info
             if not item and not file_info:
                 selected_items = self.file_list.selectedItems()
-            if not selected_items:
-                self.show_warning("Please select a file to delete")
-                return
-            item = selected_items[0]
-            file_info = item.data(0, Qt.ItemDataRole.UserRole)
+                if not selected_items:
+                    self.show_warning("Please select a file to delete")
+                    return
+                item = selected_items[0]
+                file_id = item.data(0, Qt.ItemDataRole.UserRole)
+            else:
+                file_id = file_info.file_id
             
-            if not file_info:
-                self.show_error("Invalid file selection")
-                return
-                
-            # Verify ownership
-            if file_info.owner_id != self.user_id:
-                self.show_error("You can only delete your own files")
-                return
-
             # Confirm deletion
             reply = QMessageBox.question(
                 self,
                 "Confirm Deletion",
-                f"Are you sure you want to delete {file_info.name}?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                "Are you sure you want to delete this file?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
             )
             
-            if reply != QMessageBox.StandardButton.Yes:
-                return
+            if reply == QMessageBox.StandardButton.Yes:
+                # Show progress dialog
+                progress = QProgressBar()
+                progress.setRange(0, 0)  # Indeterminate progress
+                progress_dialog = QMessageBox(self)
+                progress_dialog.setWindowTitle("Deleting File")
+                progress_dialog.setText("Removing file from network...")
+                progress_dialog.setStandardButtons(QMessageBox.NoButton)
+                progress_dialog.layout().addWidget(progress)
+                progress_dialog.show()
                 
-            # Delete file
-            async def perform_deletion():
-                try:
-                    success = await self.file_manager.remove_file(file_info.file_id)
-                    if success:
-                        # Update UI in main thread
-                        def update_ui():
-                            self.update_file_list()
-                            self.show_info(f"Successfully deleted file: {file_info.name}")
-                        QTimer.singleShot(0, update_ui)
-                    else:
-                        def show_error():
+                # Delete file in background
+                async def delete():
+                    try:
+                        success = await self.file_manager.delete_file(file_id, self.user_id)
+                        if success:
+                            self.show_info("File deleted successfully")
+                            self.update_file_list()  # Refresh file list
+                        else:
                             self.show_error("Failed to delete file")
-                        QTimer.singleShot(0, show_error)
-                        
-                except Exception as e:
-                    self.logger.error(f"Error deleting file: {e}")
-                    def show_error():
-                        self.show_error(f"Failed to delete file: {str(e)}")
-                    QTimer.singleShot(0, show_error)
-            
-            # Get the event loop and run the async operation
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(perform_deletion())
-            else:
-                loop.run_until_complete(perform_deletion())
+                    except Exception as e:
+                        self.show_error(f"Error deleting file: {str(e)}")
+                    finally:
+                        progress_dialog.close()
                 
+                # Run async operation
+                asyncio.create_task(delete())
+            
         except Exception as e:
-            self.logger.error(f"Error in delete_file: {e}")
             self.show_error(f"Error deleting file: {str(e)}")
 
     def pause_transfer(self):
@@ -503,52 +519,40 @@ class MainWindow(QMainWindow):
                 self.show_error(f"Error cancelling transfer: {e}")
 
     def connect_to_peer(self):
-        """Handle peer connection."""
+        """Connect to a peer using the specified address."""
         try:
-            # Get selected peer
-            selected_items = self.peer_list.selectedItems()
-            if not selected_items:
-                self.show_error("Please select a peer to connect to")
+            # Get peer address from user
+            address, ok = QInputDialog.getText(
+                self, "Connect to Peer", "Enter peer address (host:port):"
+            )
+            
+            if not ok or not address:
                 return
                 
-            peer_id = selected_items[0].data(0, Qt.ItemDataRole.UserRole)
-            
-            # Create a new event loop for this operation
+            # Parse address
+            try:
+                host, port_str = address.split(":")
+                port = int(port_str)
+            except ValueError:
+                self.show_error("Invalid address format. Please use host:port")
+                return
+                
+            # Attempt connection
             async def connect():
-                try:
-                    # Create a new event loop for this operation
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    
-                    try:
-                        # Connect to peer
-                        await self.network_manager.connect_to_peer(peer_id)
-                        
-                        # Update UI in main thread
-                        def update_ui():
-                            self.update_peer_list()
-                            self.show_info(f"Successfully connected to peer: {peer_id}")
-                        
-                        QTimer.singleShot(0, update_ui)
-                        
-                    finally:
-                        loop.close()
-                        
-                except Exception as e:
-                    error_msg = str(e)
-                    self.logger.error(f"Error connecting to peer: {error_msg}")
-                    
-                    def show_error():
-                        self.show_error(f"Failed to connect to peer: {error_msg}")
-                    QTimer.singleShot(0, show_error)
+                success = await self.network_manager.connect_to_peer(host, port)
+                if success:
+                    self.show_info(f"Successfully connected to {address}")
+                    self.update_peer_list()  # Refresh peer list
+                else:
+                    self.show_error(f"Failed to connect to {address}")
             
-            # Run the async operation
-            asyncio.run(connect())
+            # Run connection in event loop
+            loop = asyncio.get_event_loop()
+            loop.create_task(connect())
             
         except Exception as e:
-            error_msg = str(e)
-            self.logger.error(f"Error in connect_to_peer: {error_msg}")
-            self.show_error(f"Error connecting to peer: {error_msg}")
+            self.logger.error(f"Error connecting to peer: {e}")
+            self.show_error(f"Error connecting to peer: {str(e)}")
 
     def disconnect_from_peer(self):
         """Disconnect from a selected peer."""
@@ -602,43 +606,30 @@ class MainWindow(QMainWindow):
 
     def update_file_list(self):
         """Update the file list display."""
-        try:
-            self.file_list.clear()
-            
-            async def fetch_files():
-                try:
-                    # Create a new event loop for this operation
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    
-                    try:
-                        files = await self.file_manager.get_all_files()
-                        
-                        # Schedule UI update in the main thread
-                        def update_ui():
-                            for metadata in files:
-                                item = QTreeWidgetItem([
-                                    metadata.name,
-                                    self.format_size(metadata.size),
-                                    metadata.owner_name,
-                                    "Available" if metadata.is_available else "Unavailable"
-                                ])
-                                item.setData(0, Qt.ItemDataRole.UserRole, metadata)
-                                self.file_list.addTopLevelItem(item)
-                        
-                        QTimer.singleShot(0, update_ui)
-                        
-                    finally:
-                        loop.close()
-                        
-                except Exception as e:
-                    self.logger.error(f"Error fetching files: {e}")
-            
-            # Run the async operation
-            asyncio.run(fetch_files())
-                
-        except Exception as e:
-            self.logger.error(f"Error updating file list: {e}")
+        self.logger.debug("Updating file list")
+        self.file_list.clear()
+        
+        # Create a timer to handle async operation
+        timer = QTimer()
+        timer.setSingleShot(True)
+        
+        async def update_files():
+            try:
+                files = await self.file_manager.get_shared_files()
+                self.file_list.clear()
+                for file_info in files:
+                    item = QListWidgetItem()
+                    item.setText(f"{file_info['name']} ({self.format_size(file_info['size'])})")
+                    item.setData(Qt.ItemDataRole.UserRole, file_info)
+                    self.file_list.addItem(item)
+            except Exception as e:
+                self.logger.error(f"Error updating file list: {e}")
+        
+        def on_timeout():
+            asyncio.create_task(update_files())
+        
+        timer.timeout.connect(on_timeout)
+        timer.start(0)  # Start immediately
 
     def format_size(self, size: int) -> str:
         """Format file size in human-readable format."""
@@ -770,7 +761,7 @@ class MainWindow(QMainWindow):
         pass
 
     def update_transfer_progress(self, transfer_id, progress, status):
-        """Handle transfer progress update."""
+        """Update transfer progress in the UI."""
         # Implementation of update_transfer_progress method
         pass
 

@@ -1,7 +1,7 @@
 import os
 import hashlib
 import json
-from typing import Dict, List, Optional, Tuple, Callable, Set
+from typing import Dict, List, Optional, Tuple, Callable
 from dataclasses import dataclass
 from datetime import datetime
 import logging
@@ -12,7 +12,8 @@ import shutil
 
 from src.database.db_manager import DatabaseManager
 from src.file_management.file_transfer import FileTransfer
-from .file_metadata import FileMetadata
+from src.file_management.file_metadata import FileMetadata, FileMetadataManager
+from src.network.dht import DHT
 
 @dataclass
 class FileChunk:
@@ -39,242 +40,98 @@ class FileManagerError(Exception):
     pass
 
 class FileManager:
-    """Manages file metadata and transfers."""
+    """Manages file operations in the P2P file sharing system."""
 
     # Constants
     CHUNK_SIZE = 1024 * 1024  # 1MB chunks
 
-    def __init__(self, storage_dir: Path, temp_dir: Path, cache_dir: Path, db_manager: DatabaseManager):
-        """Initialize the file manager."""
-        self.storage_dir = storage_dir
-        self.temp_dir = temp_dir
-        self.cache_dir = cache_dir
+    def __init__(self, storage_dir: str, temp_dir: str, cache_dir: str,
+                 db_manager: DatabaseManager, dht: Optional[DHT] = None):
+        self.storage_dir = Path(storage_dir)
+        self.temp_dir = Path(temp_dir)
+        self.cache_dir = Path(cache_dir)
         self.db_manager = db_manager
-        self.logger = logging.getLogger(__name__)
+        self.dht = dht
+        self.logger = logging.getLogger("FileManager")
+        self.active_transfers: Dict[str, FileTransfer] = {}
+        self.metadata_manager = FileMetadataManager()
         
         # Create directories if they don't exist
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        
-        # In-memory storage for file metadata
-        self.file_metadata: Dict[str, FileMetadata] = {}
-        # Set of seen metadata to prevent duplicates
-        self.seen_metadata: Set[str] = set()
-        # Active transfers
-        self.active_transfers: Dict[str, Dict] = {}
-
-    async def add_file(self, file_path: str, owner_id: str, owner_name: str) -> FileMetadata:
-        """Add a new file to the system."""
-        try:
-            # Create metadata
-            metadata = FileMetadata.create_from_file(file_path, owner_id, owner_name)
-            
-            # Store metadata
-            self.file_metadata[metadata.file_id] = metadata
-            self.seen_metadata.add(metadata.file_id)
-            
-            # Store in database
-            await self.db_manager.store_file_metadata(metadata)
-            
-            self.logger.info(f"Added file: {metadata.name} (ID: {metadata.file_id})")
-            return metadata
-            
-        except Exception as e:
-            self.logger.error(f"Error adding file: {e}")
-            raise
-
-    async def remove_file(self, file_id: str) -> bool:
-        """Remove a file from the system."""
-        try:
-            if file_id in self.file_metadata:
-                metadata = self.file_metadata[file_id]
-                
-                # Remove from memory
-                del self.file_metadata[file_id]
-                self.seen_metadata.discard(file_id)
-                
-                # Remove from database
-                await self.db_manager.remove_file_metadata(file_id)
-                
-                self.logger.info(f"Removed file: {metadata.name} (ID: {file_id})")
-                return True
-                
-            return False
-            
-        except Exception as e:
-            self.logger.error(f"Error removing file: {e}")
-            raise
-
-    async def get_file_metadata(self, file_id: str) -> Optional[FileMetadata]:
-        """Get metadata for a file."""
-        return self.file_metadata.get(file_id)
-
-    async def get_all_files(self) -> List[FileMetadata]:
-        """Get all file metadata."""
-        return list(self.file_metadata.values())
-
-    async def get_files_by_owner(self, owner_id: str) -> List[FileMetadata]:
-        """Get all files owned by a specific peer."""
-        return [
-            metadata for metadata in self.file_metadata.values()
-            if metadata.owner_id == owner_id
-        ]
-
-    async def has_seen_metadata(self, metadata: FileMetadata) -> bool:
-        """Check if we've seen this metadata before."""
-        return metadata.file_id in self.seen_metadata
-
-    async def store_metadata(self, metadata: FileMetadata) -> bool:
-        """Store received metadata."""
-        try:
-            if not await self.has_seen_metadata(metadata):
-                self.file_metadata[metadata.file_id] = metadata
-                self.seen_metadata.add(metadata.file_id)
-                await self.db_manager.store_file_metadata(metadata)
-                return True
-            return False
-        except Exception as e:
-            self.logger.error(f"Error storing metadata: {e}")
-            return False
-
-    async def start_transfer(self, file_id: str, peer_id: str, is_download: bool) -> str:
-        """Start a file transfer."""
-        transfer_id = hashlib.sha256(
-            f"{file_id}{peer_id}{datetime.now().timestamp()}".encode()
-        ).hexdigest()
-        
-        self.active_transfers[transfer_id] = {
-            'file_id': file_id,
-            'peer_id': peer_id,
-            'is_download': is_download,
-            'progress': 0.0,
-            'status': 'starting',
-            'start_time': datetime.now()
-        }
-        
-        return transfer_id
-
-    async def update_transfer(self, transfer_id: str, progress: float, status: str):
-        """Update transfer status."""
-        if transfer_id in self.active_transfers:
-            self.active_transfers[transfer_id].update({
-                'progress': progress,
-                'status': status
-            })
-
-    async def get_transfer_status(self, transfer_id: str) -> Optional[tuple]:
-        """Get transfer status."""
-        if transfer_id in self.active_transfers:
-            transfer = self.active_transfers[transfer_id]
-            return transfer['progress'], transfer['status']
-        return None
-
-    async def cleanup_transfer(self, transfer_id: str):
-        """Clean up a completed transfer."""
-        if transfer_id in self.active_transfers:
-            del self.active_transfers[transfer_id]
-
-    async def cleanup(self):
-        """Clean up resources."""
-        # Clean up temporary files
-        for file in self.temp_dir.glob('*'):
-            try:
-                file.unlink()
-            except Exception as e:
-                self.logger.error(f"Error cleaning up temp file {file}: {e}")
-
-    def add_file(self, file_path: str, owner_id: str) -> Optional[FileMetadata]:
+    
+    async def add_file(self, file_path: str, owner_id: str, owner_name: str) -> Optional[FileMetadata]:
         """Add a file to the system.
         
         Args:
             file_path: Path to the file to add
             owner_id: ID of the user who owns the file
+            owner_name: Username of the owner
             
         Returns:
             FileMetadata object if successful, None otherwise
         """
         try:
             # 1. Validation Stage
-            self.logger.debug(f"[DEBUG] Starting file addition: {file_path}")
+            self.logger.debug(f"Starting file addition: {file_path}")
             path = Path(file_path)
             if not path.exists():
-                self.logger.error("[ERROR] File does not exist")
+                self.logger.error("File does not exist")
                 raise FileManagerError("File does not exist")
             if not path.is_file():
-                self.logger.error("[ERROR] Path is not a file")
+                self.logger.error("Path is not a file")
                 raise FileManagerError("Path is not a file")
             if not os.access(file_path, os.R_OK):
-                self.logger.error("[ERROR] File is not readable")
+                self.logger.error("File is not readable")
                 raise FileManagerError("File is not readable")
             
-            # 2. Metadata Creation Stage
-            self.logger.debug("[DEBUG] Creating metadata")
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If we're in an async context, create a new event loop
-                new_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(new_loop)
+            # 2. Create Metadata
+            self.logger.debug("Creating metadata")
+            metadata = await self.metadata_manager.create_metadata(path, owner_id, owner_name)
+            
+            # 3. Copy File to Storage
+            try:
+                self.logger.debug("Copying file to storage")
+                target_path = self._get_file_path(metadata.file_id)
+                target_path.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(file_path, target_path / metadata.name)
+                self.logger.debug("File copied successfully")
+            except Exception as e:
+                self.logger.error(f"Error copying file: {e}")
+                raise FileManagerError(f"Failed to copy file: {e}")
+            
+            # 4. Store Metadata
+            try:
+                self.logger.debug("Storing metadata")
+                await self.metadata_manager.add_metadata(metadata)
+            except Exception as e:
+                self.logger.error(f"Error storing metadata: {e}")
+                # Clean up copied file
+                shutil.rmtree(target_path)
+                raise FileManagerError(f"Failed to store metadata: {e}")
+            
+            # 5. Broadcast Metadata
+            if self.dht:
                 try:
-                    metadata = new_loop.run_until_complete(self.create_file_metadata(file_path, owner_id))
-                finally:
-                    new_loop.close()
-            else:
-                metadata = loop.run_until_complete(self.create_file_metadata(file_path, owner_id))
-            
-            if not metadata:
-                self.logger.error("[ERROR] Failed to create metadata")
-                raise FileManagerError("Failed to create metadata")
-            
-            # 3. Storage Stage
-            try:
-                self.logger.debug("[DEBUG] Saving metadata")
-                if loop.is_running():
-                    new_loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(new_loop)
-                    try:
-                        if not new_loop.run_until_complete(self.save_file_metadata(metadata)):
-                            self.logger.error("[ERROR] Failed to save metadata")
-                            raise FileManagerError("Failed to save metadata")
-                    finally:
-                        new_loop.close()
-                else:
-                    if not loop.run_until_complete(self.save_file_metadata(metadata)):
-                        self.logger.error("[ERROR] Failed to save metadata")
-                        raise FileManagerError("Failed to save metadata")
-                
-                self.logger.debug("[DEBUG] Copying file to storage")
-                target_path = self._get_file_path(metadata.hash) / metadata.name
-                shutil.copy2(file_path, target_path)
-                self.logger.debug("[DEBUG] File copied successfully")
-            except Exception as e:
-                self.logger.error(f"[ERROR] Storage stage failed: {str(e)}")
-                raise FileManagerError(f"Storage stage failed: {str(e)}")
-            
-            # 4. Final Verification Stage
-            try:
-                self.logger.debug("[DEBUG] Performing final verification")
-                shared_files = self.get_shared_files()
-                if not any(f.hash == metadata.hash for f in shared_files):
-                    self.logger.error("[ERROR] File not found in shared files after addition")
-                    raise FileManagerError("File not found in shared files after addition")
-                self.logger.debug("[DEBUG] Final verification passed")
-            except Exception as e:
-                self.logger.error(f"[ERROR] Final verification failed: {str(e)}")
-                raise FileManagerError(f"Final verification failed: {str(e)}")
+                    self.logger.debug("Broadcasting metadata")
+                    await self.dht.broadcast_file_metadata(metadata)
+                except Exception as e:
+                    self.logger.error(f"Error broadcasting metadata: {e}")
+                    # Don't raise error here, as the file is already added
             
             self.logger.info(f"File added successfully: {file_path}")
             return metadata
             
         except Exception as e:
-            self.logger.error(f"[ERROR] File addition failed: {str(e)}")
-            raise FileManagerError(f"Failed to add file: {str(e)}")
+            self.logger.error(f"File addition failed: {e}")
+            raise FileManagerError(f"Failed to add file: {e}")
     
-    def delete_file(self, file_hash: str, user_id: str) -> bool:
+    async def delete_file(self, file_id: str, user_id: str) -> bool:
         """Delete a file from the system.
         
         Args:
-            file_hash: Hash of the file to delete
+            file_id: ID of the file to delete
             user_id: ID of the user requesting deletion
             
         Returns:
@@ -282,9 +139,7 @@ class FileManager:
         """
         try:
             # Get file metadata
-            metadata = asyncio.get_event_loop().run_until_complete(
-                self.load_file_metadata(file_hash)
-            )
+            metadata = await self.metadata_manager.get_metadata(file_id)
             if not metadata:
                 raise FileManagerError("File not found")
             
@@ -292,10 +147,21 @@ class FileManager:
             if metadata.owner_id != user_id:
                 raise FileManagerError("Permission denied: You can only delete your own files")
             
-            # Delete file and metadata
-            file_path = self._get_file_path(file_hash)
+            # Delete file
+            file_path = self._get_file_path(file_id)
             if file_path.exists():
                 shutil.rmtree(file_path)
+            
+            # Remove metadata
+            await self.metadata_manager.remove_metadata(file_id)
+            
+            # Broadcast deletion if DHT is available
+            if self.dht:
+                try:
+                    metadata.is_available = False
+                    await self.dht.broadcast_file_metadata(metadata)
+                except Exception as e:
+                    self.logger.error(f"Error broadcasting file deletion: {e}")
             
             return True
             
@@ -303,11 +169,30 @@ class FileManager:
             self.logger.error(f"Error deleting file: {e}")
             raise FileManagerError(f"Failed to delete file: {e}")
     
-    def start_file_transfer(self, file_hash: str, target_path: str, user_id: str) -> str:
+    def _get_file_path(self, file_id: str) -> Path:
+        """Get the path where a file should be stored."""
+        return self.storage_dir / file_id
+    
+    async def get_shared_files(self) -> List[FileMetadata]:
+        """Get list of all shared files."""
+        return await self.metadata_manager.get_all_metadata()
+    
+    async def get_file_metadata(self, file_id: str) -> Optional[FileMetadata]:
+        """Get metadata for a specific file."""
+        return await self.metadata_manager.get_metadata(file_id)
+    
+    def get_transfer_status(self, transfer_id: str) -> Optional[Tuple[float, str]]:
+        """Get the status of a file transfer."""
+        transfer = self.active_transfers.get(transfer_id)
+        if not transfer:
+            return None
+        return transfer.get_status()
+    
+    async def start_file_transfer(self, file_id: str, target_path: str, user_id: str) -> str:
         """Start a file transfer.
         
         Args:
-            file_hash: Hash of the file to transfer
+            file_id: ID of the file to transfer
             target_path: Path where the file should be saved
             user_id: ID of the user requesting the transfer
             
@@ -316,25 +201,23 @@ class FileManager:
         """
         try:
             # Get file metadata
-            metadata = asyncio.get_event_loop().run_until_complete(
-                self.load_file_metadata(file_hash)
-            )
+            metadata = await self.metadata_manager.get_metadata(file_id)
             if not metadata:
                 raise FileManagerError("File not found")
             
-            # Check permissions
-            if user_id not in metadata.permissions or 'read' not in metadata.permissions[user_id]:
-                raise FileManagerError("Permission denied: You don't have read access to this file")
+            # Check if file is available
+            if not metadata.is_available:
+                raise FileManagerError("File is no longer available")
             
             # Create transfer
             transfer = FileTransfer(
-                file_id=file_hash,
+                file_id=file_id,
                 file_name=metadata.name,
                 file_size=metadata.size,
-                file_hash=file_hash,
+                file_hash=metadata.hash,
                 target_path=target_path,
                 owner_id=metadata.owner_id,
-                permissions=metadata.permissions
+                permissions={}  # No permissions needed for downloads
             )
             
             # Start transfer
@@ -362,10 +245,6 @@ class FileManager:
             if not transfer:
                 raise FileManagerError("Transfer not found")
             
-            # Check permissions
-            if transfer.owner_id != user_id:
-                raise FileManagerError("Permission denied: You can only cancel your own transfers")
-            
             # Cancel transfer
             transfer.cancel()
             del self.active_transfers[transfer_id]
@@ -376,56 +255,26 @@ class FileManager:
             self.logger.error(f"Error cancelling transfer: {e}")
             raise FileManagerError(f"Failed to cancel transfer: {e}")
     
-    def get_shared_files(self) -> List[FileMetadata]:
-        """Get list of shared files.
-        
-        Returns:
-            List of FileMetadata objects
-        """
-        try:
-            # Get the current event loop
-            loop = asyncio.get_event_loop()
-            
-            # If we're already in an async context, raise an error
-            if loop.is_running():
-                raise RuntimeError("Cannot call get_shared_files from an async context. Use get_shared_files_async instead.")
-            
-            # Run the async function in the current event loop
-            return loop.run_until_complete(self.get_shared_files_async())
-        except Exception as e:
-            self.logger.error(f"Error getting shared files: {e}")
-            return []
-
     def get_active_transfers(self) -> List[FileTransfer]:
-        """Get list of active transfers.
-        
-        Returns:
-            List of FileTransfer objects
-        """
+        """Get list of active transfers."""
         return list(self.active_transfers.values())
-
-    def _get_file_path(self, file_hash: str) -> Path:
-        """Get the path for a file in storage.
-        
-        Args:
-            file_hash: Hash of the file
+    
+    async def cleanup(self):
+        """Clean up resources."""
+        try:
+            # Cancel all active transfers
+            for transfer in self.active_transfers.values():
+                transfer.cancel()
+            self.active_transfers.clear()
             
-        Returns:
-            Path object for the file
-        """
-        return self.storage_dir / file_hash
-
-    def _get_chunk_path(self, file_hash: str, chunk_index: int) -> Path:
-        """Get the path for a file chunk.
-        
-        Args:
-            file_hash: Hash of the file
-            chunk_index: Index of the chunk
+            # Clean up temporary files
+            if self.temp_dir.exists():
+                shutil.rmtree(self.temp_dir)
+                self.temp_dir.mkdir()
             
-        Returns:
-            Path object for the chunk
-        """
-        return self._get_file_path(file_hash) / f"chunk_{chunk_index}"
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {e}")
+            raise
 
     def _calculate_hash(self, data: bytes) -> str:
         """Calculate SHA-256 hash of data."""
@@ -525,7 +374,7 @@ class FileManager:
     async def save_file_metadata(self, metadata: FileMetadata) -> bool:
         """Save file metadata to disk."""
         try:
-            metadata_path = self._get_file_path(metadata.hash) / "metadata.json"
+            metadata_path = self._get_file_path(metadata.file_id) / "metadata.json"
             metadata_path.parent.mkdir(parents=True, exist_ok=True)
 
             metadata_dict = {
@@ -553,10 +402,10 @@ class FileManager:
             self.logger.error(f"Error saving file metadata: {e}")
             return False
 
-    async def load_file_metadata(self, file_hash: str) -> Optional[FileMetadata]:
+    async def load_file_metadata(self, file_id: str) -> Optional[FileMetadata]:
         """Load file metadata from disk."""
         try:
-            metadata_path = self._get_file_path(file_hash) / "metadata.json"
+            metadata_path = self._get_file_path(file_id) / "metadata.json"
             if not metadata_path.exists():
                 return None
 
@@ -584,10 +433,10 @@ class FileManager:
             self.logger.error(f"Error loading file metadata: {e}")
             return None
 
-    async def save_chunk(self, file_hash: str, chunk: FileChunk) -> bool:
+    async def save_chunk(self, file_id: str, chunk: FileChunk) -> bool:
         """Save a file chunk to disk."""
         try:
-            chunk_path = self._get_chunk_path(file_hash, chunk.index)
+            chunk_path = self._get_file_path(file_id) / f"chunk_{chunk.index}"
             chunk_path.parent.mkdir(parents=True, exist_ok=True)
 
             with open(chunk_path, 'wb') as f:
@@ -597,10 +446,10 @@ class FileManager:
             self.logger.error(f"Error saving chunk: {e}")
             return False
 
-    async def load_chunk(self, file_hash: str, chunk_index: int) -> Optional[FileChunk]:
+    async def load_chunk(self, file_id: str, chunk_index: int) -> Optional[FileChunk]:
         """Load a file chunk from disk."""
         try:
-            chunk_path = self._get_chunk_path(file_hash, chunk_index)
+            chunk_path = self._get_file_path(file_id) / f"chunk_{chunk_index}"
             if not chunk_path.exists():
                 return None
 
@@ -617,34 +466,18 @@ class FileManager:
             self.logger.error(f"Error loading chunk: {e}")
             return None
 
-    async def verify_chunk(self, file_hash: str, chunk_index: int) -> bool:
+    async def verify_chunk(self, file_id: str, chunk_index: int) -> bool:
         """Verify the integrity of a chunk."""
-        chunk = await self.load_chunk(file_hash, chunk_index)
+        chunk = await self.load_chunk(file_id, chunk_index)
         if not chunk:
             return False
 
-        metadata = await self.load_file_metadata(file_hash)
+        metadata = await self.load_file_metadata(file_id)
         if not metadata:
             return False
 
         expected_chunk = metadata.chunks[chunk_index]
         return chunk.hash == expected_chunk.hash
-
-    def get_transfer_status(self, transfer_id: str) -> Optional[Tuple[float, str]]:
-        """Get the status of a file transfer."""
-        task = self.active_transfers.get(transfer_id)
-        if not task:
-            return None
-
-        if task.done():
-            try:
-                task.result()
-                return 1.0, "completed"
-            except Exception as e:
-                return 0.0, f"failed: {str(e)}"
-
-        # TODO: Implement progress tracking
-        return 0.5, "in_progress"
 
     def track_progress(self, transfer_id: str, callback: Callable[[float], None]) -> None:
         """Track the progress of a file transfer.
@@ -782,7 +615,7 @@ class FileManager:
             
             # Copy file to storage directory
             source_path = Path(file_path)
-            target_path = self._get_file_path(metadata.hash)
+            target_path = self._get_file_path(metadata.file_id)
             self.logger.debug(f"Copying file to: {target_path}")
             target_path.mkdir(parents=True, exist_ok=True)
             

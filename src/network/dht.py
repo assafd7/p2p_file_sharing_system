@@ -8,7 +8,6 @@ import logging
 from .protocol import Message, MessageType
 from .peer import Peer, PeerInfo
 from src.database.db_manager import DatabaseManager
-from src.file_management.file_metadata import FileMetadata
 
 class DHTError(Exception):
     """Base exception class for DHT-related errors."""
@@ -748,100 +747,114 @@ class DHT:
             await self._handle_peer_disconnect(peer)
             raise
 
-    async def _handle_file_metadata(self, message: Message, peer: Peer):
-        """Handle file metadata message."""
+    async def broadcast_file_metadata(self, metadata: 'FileMetadata') -> None:
+        """Broadcast file metadata to all connected peers."""
         try:
-            metadata_dict = message.payload.get('metadata')
-            if not metadata_dict:
-                self.logger.warning(f"Received file metadata message without metadata from {peer.id}")
-                return
-
-            # Create FileMetadata object
-            metadata = FileMetadata.from_dict(metadata_dict)
+            self.logger.info(f"Broadcasting file metadata: {metadata.name}")
             
-            # Store metadata if we haven't seen it before
-            if not await self.has_seen_metadata(metadata):
-                await self.store_metadata(metadata)
-                
-                # Forward to other peers if TTL > 0
-                if metadata.ttl > 0:
-                    metadata.ttl -= 1
-                    for other_peer in self.get_connected_peers():
-                        if other_peer.id != peer.id:
-                            await self.send_message(
-                                Message.create_file_metadata(
-                                    self.node_id,
-                                    metadata.to_dict()
-                                ),
-                                other_peer
-                            )
-        except Exception as e:
-            self.logger.error(f"Error handling file metadata: {e}")
-
-    async def _handle_file_metadata_request(self, message: Message, peer: Peer):
-        """Handle file metadata request message."""
-        try:
-            file_id = message.payload.get('file_id')
-            if not file_id:
-                self.logger.warning(f"Received file metadata request without file_id from {peer.id}")
-                return
-
-            # Get metadata from database
-            metadata = await self.db_manager.get_file_metadata(file_id)
-            if metadata:
-                # Send response
-                await self.send_message(
-                    Message.create_file_metadata_response(
-                        self.node_id,
-                        metadata.to_dict()
-                    ),
-                    peer
-                )
-        except Exception as e:
-            self.logger.error(f"Error handling file metadata request: {e}")
-
-    async def _handle_file_metadata_response(self, message: Message, peer: Peer):
-        """Handle file metadata response message."""
-        try:
-            metadata_dict = message.payload.get('metadata')
-            if not metadata_dict:
-                self.logger.warning(f"Received file metadata response without metadata from {peer.id}")
-                return
-
-            # Create FileMetadata object
-            metadata = FileMetadata.from_dict(metadata_dict)
-            
-            # Store metadata if we haven't seen it before
-            if not await self.has_seen_metadata(metadata):
-                await self.store_metadata(metadata)
-        except Exception as e:
-            self.logger.error(f"Error handling file metadata response: {e}")
-
-    async def broadcast_file_metadata(self, metadata: FileMetadata):
-        """Broadcast file metadata to all peers."""
-        try:
-            message = Message.create_file_metadata(
-                self.node_id,
-                metadata.to_dict()
+            # Create the message
+            message = Message(
+                type=MessageType.FILE_METADATA,
+                sender_id=self.node_id,
+                payload=metadata.to_dict()
             )
             
+            # Send to all connected peers
             for peer in self.get_connected_peers():
-                await self.send_message(message, peer)
-                
-            self.logger.info(f"Broadcasted metadata for file: {metadata.name}")
+                try:
+                    await self.send_message(message, peer)
+                    self.logger.debug(f"Sent file metadata to peer {peer.id}")
+                except Exception as e:
+                    self.logger.error(f"Error sending file metadata to peer {peer.id}: {e}")
+                    
         except Exception as e:
             self.logger.error(f"Error broadcasting file metadata: {e}")
+            raise
 
-    async def request_file_metadata(self, file_id: str, peer: Peer) -> Optional[FileMetadata]:
-        """Request file metadata from a peer."""
+    async def _handle_file_metadata(self, message: Message, peer: Peer) -> None:
+        """Handle incoming file metadata message."""
         try:
-            message = Message.create_file_metadata_request(
-                self.node_id,
-                file_id
-            )
+            self.logger.info(f"Received file metadata from peer {peer.id}")
             
-            await self.send_message(message, peer)
-            self.logger.info(f"Requested metadata for file: {file_id}")
+            # Parse metadata
+            metadata = FileMetadata.from_dict(message.payload)
+            
+            # Check if we've seen this metadata before
+            if await self.has_seen_metadata(metadata):
+                self.logger.debug(f"Already seen metadata for file {metadata.name}")
+                return
+                
+            # Mark metadata as seen
+            await self.mark_metadata_seen(metadata, peer.id)
+            
+            # Store metadata
+            await self.add_metadata(metadata)
+            
+            # Forward to other peers if TTL > 0
+            if metadata.ttl > 0:
+                metadata.ttl -= 1
+                for other_peer in self.get_connected_peers():
+                    if other_peer.id != peer.id:
+                        try:
+                            forward_message = Message(
+                                type=MessageType.FILE_METADATA,
+                                sender_id=self.node_id,
+                                payload=metadata.to_dict()
+                            )
+                            await self.send_message(forward_message, other_peer)
+                            self.logger.debug(f"Forwarded file metadata to peer {other_peer.id}")
+                        except Exception as e:
+                            self.logger.error(f"Error forwarding file metadata to peer {other_peer.id}: {e}")
+                            
         except Exception as e:
-            self.logger.error(f"Error requesting file metadata: {e}")
-            return None
+            self.logger.error(f"Error handling file metadata: {e}")
+            raise
+
+    async def _handle_file_metadata_request(self, message: Message, peer: Peer) -> None:
+        """Handle file metadata request message."""
+        try:
+            self.logger.info(f"Received file metadata request from peer {peer.id}")
+            
+            # Get requested file ID
+            file_id = message.payload.get('file_id')
+            if not file_id:
+                self.logger.error("File metadata request missing file_id")
+                return
+                
+            # Get metadata
+            metadata = await self.get_metadata(file_id)
+            if not metadata:
+                self.logger.debug(f"File metadata not found for {file_id}")
+                return
+                
+            # Send response
+            response = Message(
+                type=MessageType.FILE_METADATA_RESPONSE,
+                sender_id=self.node_id,
+                payload=metadata.to_dict()
+            )
+            await self.send_message(response, peer)
+            self.logger.debug(f"Sent file metadata response to peer {peer.id}")
+            
+        except Exception as e:
+            self.logger.error(f"Error handling file metadata request: {e}")
+            raise
+
+    async def _handle_file_metadata_response(self, message: Message, peer: Peer) -> None:
+        """Handle file metadata response message."""
+        try:
+            self.logger.info(f"Received file metadata response from peer {peer.id}")
+            
+            # Parse metadata
+            metadata = FileMetadata.from_dict(message.payload)
+            
+            # Store metadata
+            await self.add_metadata(metadata)
+            
+            # Notify UI if callback exists
+            if hasattr(self, 'on_file_metadata_received'):
+                self.on_file_metadata_received(metadata)
+                
+        except Exception as e:
+            self.logger.error(f"Error handling file metadata response: {e}")
+            raise
