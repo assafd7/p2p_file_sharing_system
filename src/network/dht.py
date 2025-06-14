@@ -702,14 +702,22 @@ class DHT:
                     break
                     
                 # Parse message
-                message = Message.deserialize(data)
-                self.logger.debug(f"Received message of type {message.type} from peer {peer.id}")
+                try:
+                    message = Message.deserialize(data)
+                    self.logger.debug(f"Received message of type {message.type} from peer {peer.id}")
+                    self.logger.debug(f"Message payload: {message.payload}")
+                except Exception as e:
+                    self.logger.error(f"Error parsing message from peer {peer.id}: {e}")
+                    continue
                 
                 # Handle message
                 if message.type in self.message_handlers:
                     self.logger.debug(f"Handling message of type {message.type} from peer {peer.id}")
-                    await self.message_handlers[message.type](message, peer)
-                    self.logger.debug(f"Finished handling message of type {message.type} from peer {peer.id}")
+                    try:
+                        await self.message_handlers[message.type](message, peer)
+                        self.logger.debug(f"Finished handling message of type {message.type} from peer {peer.id}")
+                    except Exception as e:
+                        self.logger.error(f"Error in message handler for type {message.type}: {e}")
                 else:
                     self.logger.warning(f"No handler for message type: {message.type}")
                     
