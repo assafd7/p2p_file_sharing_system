@@ -16,6 +16,7 @@ import asyncio
 from src.file_management.file_manager import FileManager
 from src.network.dht import DHT
 from src.database.db_manager import DatabaseManager
+from src.file_management.file_sharing_manager import FileSharingManager
 
 class TransferWorker(QThread):
     progress_updated = pyqtSignal(str, float, str)  # transfer_id, progress, status
@@ -55,6 +56,13 @@ class MainWindow(QMainWindow):
         self.username = username
         self.logger = logging.getLogger(__name__)
         self.transfer_workers: Dict[str, TransferWorker] = {}
+        
+        # Initialize file sharing manager
+        self.file_sharing_manager = FileSharingManager(
+            dht=network_manager,
+            db_manager=db_manager,
+            storage_dir=Path("data/files")
+        )
 
         # Set window properties
         self.setWindowTitle("P2P File Sharing System")
@@ -282,6 +290,7 @@ class MainWindow(QMainWindow):
     def share_file(self):
         """Share a file with the network."""
         try:
+            # Open file dialog
             file_path, _ = QFileDialog.getOpenFileName(
                 self,
                 "Select File to Share",
@@ -292,99 +301,140 @@ class MainWindow(QMainWindow):
             if not file_path:
                 return
                 
-            try:
-                # Add file to shared files
-                metadata = self.file_manager.add_file(file_path, self.user_id)
-                
-                if not metadata:
-                    raise Exception("No metadata returned from file manager")
+            # Share file
+            async def share():
+                try:
+                    metadata = await self.file_sharing_manager.share_file(file_path)
+                    if metadata:
+                        self.show_info(f"Successfully shared file: {metadata.name}")
+                        self.update_file_list()
+                    else:
+                        self.show_error("Failed to share file")
+                except Exception as e:
+                    self.logger.error(f"Error sharing file: {e}")
+                    self.show_error(f"Error sharing file: {str(e)}")
                     
-                self.logger.debug(f"File shared successfully: {file_path}")
-                self.logger.debug(f"File metadata: {metadata}")
-                
-                # Verify file appears in shared files list
-                async def verify_and_update():
-                    shared_files = await self.file_manager.get_shared_files_async()
-                    if not any(f.hash == metadata.hash for f in shared_files):
-                        raise Exception("File not found in shared files list after sharing")
-                    await self.update_file_list()
-                
-                # Run verification in event loop
-                loop = asyncio.get_event_loop()
-                loop.create_task(verify_and_update())
-                
-                self.show_info(f"File shared: {file_path}")
-                
-            except Exception as e:
-                self.logger.error(f"Error sharing file: {str(e)}")
-                self.show_error(f"Failed to share file: {str(e)}")
+            asyncio.create_task(share())
+            
         except Exception as e:
-            self.logger.error(f"Error in share_file: {str(e)}")
-            self.show_error(f"Error in share_file: {str(e)}")
-
+            self.logger.error(f"Error in share_file: {e}")
+            self.show_error(f"Error sharing file: {str(e)}")
+            
     def download_file(self):
         """Download a selected file."""
-        selected_items = self.file_list.selectedItems()
-        if not selected_items:
-            self.show_warning("Please select a file to download")
-            return
-
-        file_info = selected_items[0].data(0, Qt.ItemDataRole.UserRole)
-        if not file_info:
-            self.show_error("Could not get file information")
-            return
-
         try:
-            save_path, _ = QFileDialog.getSaveFileName(
-                self,
-                "Save File",
-                file_info.name,
-                "All Files (*.*)"
-            )
-            if save_path:
-                self.file_manager.download_file(file_info.hash, save_path)
-                self.show_info(f"Downloading: {file_info.name}")
-                self.update_transfer_list()
-        except Exception as e:
-            self.show_error(f"Error downloading file: {e}")
-
-    def delete_file(self, item=None, file_info=None):
-        """Delete a selected file.
-        
-        Args:
-            item: Optional QTreeWidgetItem to delete. If None, uses the currently selected item.
-            file_info: Optional FileMetadata object. If provided, uses this instead of getting from item.
-        """
-        # If file_info is not provided, get it from the selected item
-        if file_info is None:
-            selected_items = [item] if item else self.file_list.selectedItems()
+            # Get selected item
+            selected_items = self.file_list.selectedItems()
             if not selected_items:
-                self.show_warning("Please select a file to delete")
+                self.show_warning("Please select a file to download")
                 return
-            file_info = selected_items[0].data(0, Qt.ItemDataRole.UserRole)
-            if not file_info:
-                self.show_error("Could not get file information")
+                
+            item = selected_items[0]
+            file_id = item.data(0, Qt.ItemDataRole.UserRole)
+            
+            # Get target directory
+            target_dir = QFileDialog.getExistingDirectory(
+                self,
+                "Select Download Directory",
+                "",
+                QFileDialog.Option.ShowDirsOnly
+            )
+            
+            if not target_dir:
                 return
-
-        # Confirm deletion with user
-        reply = QMessageBox.question(
-            self,
-            "Confirm Deletion",
-            f"Are you sure you want to delete {file_info.name}?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            try:
-                self.file_manager.delete_file(file_info.hash, self.user_id)
-                self.show_info(f"File deleted: {file_info.name}")
                 
-                # Update file list asynchronously
-                loop = asyncio.get_event_loop()
-                loop.create_task(self.update_file_list())
+            # Download file
+            async def download():
+                try:
+                    success = await self.file_sharing_manager.download_file(file_id, target_dir)
+                    if success:
+                        self.show_info("File download started")
+                        self.update_transfer_list()
+                    else:
+                        self.show_error("Failed to start download")
+                except Exception as e:
+                    self.logger.error(f"Error downloading file: {e}")
+                    self.show_error(f"Error downloading file: {str(e)}")
+                    
+            asyncio.create_task(download())
+            
+        except Exception as e:
+            self.logger.error(f"Error in download_file: {e}")
+            self.show_error(f"Error downloading file: {str(e)}")
+            
+    def delete_file(self, item=None, file_info=None):
+        """Delete a shared file."""
+        try:
+            # Get file info
+            if not item and not file_info:
+                selected_items = self.file_list.selectedItems()
+                if not selected_items:
+                    self.show_warning("Please select a file to delete")
+                    return
+                item = selected_items[0]
+                file_id = item.data(0, Qt.ItemDataRole.UserRole)
+            else:
+                file_id = file_info.file_id
                 
-            except Exception as e:
-                self.show_error(f"Error deleting file: {e}")
+            # Confirm deletion
+            reply = QMessageBox.question(
+                self,
+                "Confirm Deletion",
+                "Are you sure you want to delete this file?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+                
+            # Delete file
+            async def delete():
+                try:
+                    success = await self.file_sharing_manager.delete_file(file_id)
+                    if success:
+                        self.show_info("File deleted successfully")
+                        self.update_file_list()
+                    else:
+                        self.show_error("Failed to delete file")
+                except Exception as e:
+                    self.logger.error(f"Error deleting file: {e}")
+                    self.show_error(f"Error deleting file: {str(e)}")
+                    
+            asyncio.create_task(delete())
+            
+        except Exception as e:
+            self.logger.error(f"Error in delete_file: {e}")
+            self.show_error(f"Error deleting file: {str(e)}")
+            
+    def update_file_list(self):
+        """Update the file list with current shared files."""
+        try:
+            self.file_list.clear()
+            
+            # Get shared files
+            files = self.file_sharing_manager.get_shared_files()
+            
+            # Add files to list
+            for metadata in files:
+                item = QTreeWidgetItem([
+                    metadata.name,
+                    self._format_size(metadata.size),
+                    metadata.owner_id,
+                    "Available"
+                ])
+                item.setData(0, Qt.ItemDataRole.UserRole, metadata.file_id)
+                self.file_list.addTopLevelItem(item)
+                
+        except Exception as e:
+            self.logger.error(f"Error updating file list: {e}")
+            
+    def _format_size(self, size: int) -> str:
+        """Format file size in human-readable format."""
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size < 1024:
+                return f"{size:.1f} {unit}"
+            size /= 1024
+        return f"{size:.1f} PB"
 
     def pause_transfer(self):
         """Pause a selected transfer."""
@@ -508,28 +558,6 @@ class MainWindow(QMainWindow):
                 
         except Exception as e:
             self.logger.error(f"Error updating UI: {e}")
-
-    def update_file_list(self):
-        """Update the file list in the UI."""
-        try:
-            self.file_list.clear()
-            files = self.file_manager.get_shared_files_sync()
-            
-            for file in files:
-                item = QTreeWidgetItem([
-                    file['name'],
-                    str(file['size']),
-                    file['type'],
-                    file['status']
-                ])
-                self.file_list.addTopLevelItem(item)
-                
-            # Resize columns to content
-            for i in range(self.file_list.columnCount()):
-                self.file_list.resizeColumnToContents(i)
-                
-        except Exception as e:
-            self.logger.error(f"Error updating file list: {e}")
 
     def update_transfer_list(self):
         """Update the transfer list display."""

@@ -12,7 +12,6 @@ import shutil
 
 from src.database.db_manager import DatabaseManager
 from src.file_management.file_transfer import FileTransfer
-from src.network.peer import Peer
 
 @dataclass
 class FileChunk:
@@ -177,14 +176,13 @@ class FileManager:
             self.logger.error(f"Error deleting file: {e}")
             raise FileManagerError(f"Failed to delete file: {e}")
     
-    def start_file_transfer(self, file_hash: str, target_path: str, user_id: str, peer: Optional[Peer] = None) -> str:
+    def start_file_transfer(self, file_hash: str, target_path: str, user_id: str) -> str:
         """Start a file transfer.
         
         Args:
             file_hash: Hash of the file to transfer
             target_path: Path where the file should be saved
             user_id: ID of the user requesting the transfer
-            peer: Optional peer for network transfer
             
         Returns:
             Transfer ID
@@ -209,13 +207,8 @@ class FileManager:
                 file_hash=file_hash,
                 target_path=target_path,
                 owner_id=metadata.owner_id,
-                permissions=metadata.permissions,
-                peer=peer
+                permissions=metadata.permissions
             )
-            
-            # Set file protocol if it's a network transfer
-            if peer and hasattr(peer, 'dht') and peer.dht.file_protocol:
-                transfer.set_file_protocol(peer.dht.file_protocol)
             
             # Start transfer
             transfer.start()

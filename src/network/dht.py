@@ -8,7 +8,6 @@ import logging
 from .protocol import Message, MessageType
 from .peer import Peer, PeerInfo
 from src.database.db_manager import DatabaseManager
-from .file_protocol import FileProtocol
 
 class DHTError(Exception):
     """Base exception class for DHT-related errors."""
@@ -66,17 +65,13 @@ class DHT:
         self._running = False
         self._lock = asyncio.Lock()
         self._cleanup_task = None
-        self.file_protocol = None  # Will be set when file manager is available
         
         # Initialize message handlers
         self.message_handlers = {
             MessageType.PEER_LIST: self._handle_peer_list,
             MessageType.HEARTBEAT: self._handle_heartbeat,
             MessageType.GOODBYE: self._handle_goodbye,
-            MessageType.USER_INFO: self._handle_user_info,
-            MessageType.FILE_LIST: self._handle_file_list,
-            MessageType.FILE_REQUEST: self._handle_file_request,
-            MessageType.FILE_RESPONSE: self._handle_file_response
+            MessageType.USER_INFO: self._handle_user_info
         }
         
     @property
@@ -749,41 +744,34 @@ class DHT:
             await self._handle_peer_disconnect(peer)
             raise
 
-    def set_file_manager(self, file_manager):
-        """Set the file manager and initialize file protocol."""
-        self.file_protocol = FileProtocol(file_manager)
-
-    async def _handle_file_list(self, message: Message, peer: Peer):
-        """Handle file list message."""
-        if not self.file_protocol:
-            self.logger.error("File protocol not initialized")
-            return
-        
+    async def find_peer(self, peer_id: str) -> Optional[Peer]:
+        """Find a peer by ID."""
         try:
-            await self.file_protocol.handle_file_list_request(message, peer)
+            # First check local peers
+            if peer_id in self.peers:
+                return self.peers[peer_id]
+                
+            # If not found locally, use DHT to find the peer
+            # This is a basic implementation. In a real system,
+            # we would use proper DHT routing to find the peer.
+            for peer in self.peers.values():
+                if peer.id == peer_id:
+                    return peer
+                    
+            return None
+            
         except Exception as e:
-            self.logger.error(f"Error handling file list: {e}")
-
-    async def _handle_file_request(self, message: Message, peer: Peer):
-        """Handle file request message."""
-        if not self.file_protocol:
-            self.logger.error("File protocol not initialized")
-            return
-        
+            self.logger.error(f"Error finding peer {peer_id}: {e}")
+            return None
+            
+    async def broadcast_message(self, message: Message):
+        """Broadcast a message to all peers."""
         try:
-            await self.file_protocol.handle_file_request(message, peer)
+            for peer in self.peers.values():
+                try:
+                    await self.send_message(message, peer)
+                except Exception as e:
+                    self.logger.error(f"Error broadcasting to peer {peer.id}: {e}")
+                    
         except Exception as e:
-            self.logger.error(f"Error handling file request: {e}")
-
-    async def _handle_file_response(self, message: Message, peer: Peer):
-        """Handle file response message."""
-        if not self.file_protocol:
-            self.logger.error("File protocol not initialized")
-            return
-        
-        try:
-            # This is handled by the file protocol's request_file_chunk method
-            # which waits for the response
-            pass
-        except Exception as e:
-            self.logger.error(f"Error handling file response: {e}")
+            self.logger.error(f"Error broadcasting message: {e}")

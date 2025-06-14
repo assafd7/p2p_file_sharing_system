@@ -12,13 +12,16 @@ class MessageType(Enum):
     HELLO = "hello"
     PING = "PING"
     PONG = "PONG"
-    FILE_LIST = "FILE_LIST"
-    FILE_REQUEST = "file_request"
-    FILE_RESPONSE = "file_response"
+    FILE_LIST = "FILE_LIST"  # List of available files
+    FILE_REQUEST = "file_request"  # Request to download a file
+    FILE_RESPONSE = "file_response"  # File data response
+    FILE_CHUNK = "file_chunk"  # File chunk data
+    FILE_COMPLETE = "file_complete"  # File transfer complete
+    FILE_ERROR = "file_error"  # File transfer error
     PEER_LIST = "peer_list"
     GOODBYE = "goodbye"
     HEARTBEAT = "heartbeat"
-    USER_INFO = "user_info"  # New message type for username exchange
+    USER_INFO = "user_info"  # Username exchange
 
 @dataclass
 class Message:
