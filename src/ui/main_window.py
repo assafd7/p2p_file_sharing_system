@@ -283,6 +283,8 @@ class MainWindow(QMainWindow):
     def share_file(self):
         """Handle file sharing."""
         try:
+            self.logger.info("Starting file sharing process")
+            
             # Get file path from user
             file_path, _ = QFileDialog.getOpenFileName(
                 self,
@@ -292,12 +294,16 @@ class MainWindow(QMainWindow):
             )
             
             if not file_path:
+                self.logger.info("File selection cancelled by user")
                 return
+            
+            self.logger.info(f"Selected file: {file_path}")
             
             # Show progress dialog
             progress = QProgressDialog("Adding file...", "Cancel", 0, 0, self)
             progress.setWindowModality(Qt.WindowModality.WindowModal)
             progress.setAutoClose(True)
+            progress.setMinimumDuration(0)  # Show immediately
             progress.show()
             
             # Create timer for async operation
@@ -306,21 +312,29 @@ class MainWindow(QMainWindow):
             
             async def add_file():
                 try:
+                    self.logger.debug("Starting async file addition")
+                    
                     # Add file to manager
-                    await self.file_manager.add_file(
+                    metadata = await self.file_manager.add_file(
                         file_path=file_path,
                         owner_id=self.user_id,
                         owner_name=self.username
                     )
                     
+                    if not metadata:
+                        raise Exception("Failed to add file: No metadata returned")
+                    
+                    self.logger.info(f"File added successfully: {metadata.name}")
+                    
                     # Update file list
+                    self.logger.debug("Updating file list")
                     self.update_file_list()
                     
                     # Show success message
                     QMessageBox.information(
                         self,
                         "Success",
-                        "File shared successfully!"
+                        f"File '{metadata.name}' shared successfully!"
                     )
                 except Exception as e:
                     self.logger.error(f"Error sharing file: {e}")
@@ -330,9 +344,11 @@ class MainWindow(QMainWindow):
                         f"Failed to share file: {str(e)}"
                     )
                 finally:
+                    self.logger.debug("Closing progress dialog")
                     progress.close()
             
             def on_timeout():
+                self.logger.debug("Starting async file addition task")
                 asyncio.create_task(add_file())
             
             timer.timeout.connect(on_timeout)

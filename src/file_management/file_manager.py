@@ -9,6 +9,7 @@ import asyncio
 from pathlib import Path
 import time
 import shutil
+import uuid
 
 from src.database.db_manager import DatabaseManager
 from src.file_management.file_transfer import FileTransfer
@@ -62,70 +63,61 @@ class FileManager:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
     
     async def add_file(self, file_path: str, owner_id: str, owner_name: str) -> Optional[FileMetadata]:
-        """Add a file to the system.
-        
-        Args:
-            file_path: Path to the file to add
-            owner_id: ID of the user who owns the file
-            owner_name: Username of the owner
-            
-        Returns:
-            FileMetadata object if successful, None otherwise
-        """
+        """Add a file to the shared files."""
+        self.logger.info(f"Starting to add file: {file_path}")
         try:
-            # 1. Validation Stage
-            self.logger.debug(f"Starting file addition: {file_path}")
-            path = Path(file_path)
-            if not path.exists():
-                self.logger.error("File does not exist")
-                raise FileManagerError("File does not exist")
-            if not path.is_file():
-                self.logger.error("Path is not a file")
-                raise FileManagerError("Path is not a file")
-            if not os.access(file_path, os.R_OK):
-                self.logger.error("File is not readable")
-                raise FileManagerError("File is not readable")
+            # Validate file
+            if not os.path.exists(file_path):
+                self.logger.error(f"File does not exist: {file_path}")
+                raise FileNotFoundError(f"File not found: {file_path}")
             
-            # 2. Create Metadata
-            self.logger.debug("Creating metadata")
-            metadata = await self.metadata_manager.create_metadata(path, owner_id, owner_name)
+            # Get file info
+            file_size = os.path.getsize(file_path)
+            self.logger.debug(f"File size: {file_size} bytes")
             
-            # 3. Copy File to Storage
-            try:
-                self.logger.debug("Copying file to storage")
-                target_path = self._get_file_path(metadata.file_id)
-                target_path.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(file_path, target_path / metadata.name)
-                self.logger.debug("File copied successfully")
-            except Exception as e:
-                self.logger.error(f"Error copying file: {e}")
-                raise FileManagerError(f"Failed to copy file: {e}")
+            # Calculate file hash
+            self.logger.debug("Calculating file hash...")
+            file_hash = await self._calculate_file_hash(file_path)
+            self.logger.debug(f"File hash calculated: {file_hash}")
             
-            # 4. Store Metadata
-            try:
-                self.logger.debug("Storing metadata")
-                await self.metadata_manager.add_metadata(metadata)
-            except Exception as e:
-                self.logger.error(f"Error storing metadata: {e}")
-                # Clean up copied file
-                shutil.rmtree(target_path)
-                raise FileManagerError(f"Failed to store metadata: {e}")
+            # Create metadata
+            self.logger.debug("Creating file metadata...")
+            metadata = FileMetadata(
+                file_id=str(uuid.uuid4()),
+                name=os.path.basename(file_path),
+                size=file_size,
+                hash=file_hash,
+                owner_id=owner_id,
+                owner_name=owner_name,
+                upload_time=datetime.now(),
+                is_available=True,
+                ttl=5  # TTL for broadcasting
+            )
+            self.logger.debug(f"Metadata created with ID: {metadata.file_id}")
             
-            # 5. Broadcast Metadata
+            # Copy file to storage
+            self.logger.debug("Copying file to storage...")
+            storage_path = self.storage_dir / f"{metadata.file_id}_{metadata.name}"
+            shutil.copy2(file_path, storage_path)
+            self.logger.debug(f"File copied to: {storage_path}")
+            
+            # Store metadata
+            self.logger.debug("Storing metadata...")
+            await self.metadata_manager.add_metadata(metadata)
+            self.logger.debug("Metadata stored successfully")
+            
+            # Broadcast metadata if DHT is available
             if self.dht:
-                try:
-                    self.logger.debug("Broadcasting metadata")
-                    await self.dht.broadcast_file_metadata(metadata)
-                except Exception as e:
-                    self.logger.error(f"Error broadcasting metadata: {e}")
-                    # Don't raise error here, as the file is already added
+                self.logger.debug("Broadcasting metadata to network...")
+                await self.dht.broadcast_file_metadata(metadata)
+                self.logger.debug("Metadata broadcast complete")
             
-            self.logger.info(f"File added successfully: {file_path}")
+            self.logger.info(f"File added successfully: {metadata.name}")
             return metadata
             
         except Exception as e:
-            self.logger.error(f"File addition failed: {e}")
-            raise FileManagerError(f"Failed to add file: {e}")
+            self.logger.error(f"Error adding file: {e}")
+            raise
     
     async def delete_file(self, file_id: str, user_id: str) -> bool:
         """Delete a file from the system.
