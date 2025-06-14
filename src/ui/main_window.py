@@ -301,6 +301,7 @@ class MainWindow(QMainWindow):
                     asyncio.set_event_loop(loop)
                     
                     try:
+                        # Call the async add_file method with all required parameters
                         metadata = await self.file_manager.add_file(
                             file_path,
                             self.user_id,
@@ -309,7 +310,7 @@ class MainWindow(QMainWindow):
                         
                         # Broadcast metadata
                         await self.network_manager.broadcast_file_metadata(metadata)
-                        
+                
                         # Update UI in main thread
                         def update_ui():
                             self.update_file_list()
@@ -319,7 +320,7 @@ class MainWindow(QMainWindow):
                         
                     finally:
                         loop.close()
-                    
+                
                 except Exception as error:
                     error_msg = str(error)
                     self.logger.error(f"Error sharing file: {error_msg}")
@@ -344,14 +345,14 @@ class MainWindow(QMainWindow):
             if not selected_items:
                 self.show_warning("Please select a file to download")
                 return
-                
+
             item = selected_items[0]
             file_id = item.data(0, Qt.ItemDataRole.UserRole)
             
             if not file_id:
                 self.show_error("Invalid file selection")
-                return
-                
+            return
+
             # Get file metadata
             async def start_download():
                 try:
@@ -406,11 +407,11 @@ class MainWindow(QMainWindow):
             # Get file info
             if not item and not file_info:
                 selected_items = self.file_list.selectedItems()
-                if not selected_items:
-                    self.show_warning("Please select a file to delete")
-                    return
-                item = selected_items[0]
-                file_info = item.data(0, Qt.ItemDataRole.UserRole)
+            if not selected_items:
+                self.show_warning("Please select a file to delete")
+                return
+            item = selected_items[0]
+            file_info = item.data(0, Qt.ItemDataRole.UserRole)
             
             if not file_info:
                 self.show_error("Invalid file selection")
@@ -420,7 +421,7 @@ class MainWindow(QMainWindow):
             if file_info.owner_id != self.user_id:
                 self.show_error("You can only delete your own files")
                 return
-                
+
             # Confirm deletion
             reply = QMessageBox.question(
                 self,
@@ -459,7 +460,7 @@ class MainWindow(QMainWindow):
                 loop.create_task(perform_deletion())
             else:
                 loop.run_until_complete(perform_deletion())
-            
+                
         except Exception as e:
             self.logger.error(f"Error in delete_file: {e}")
             self.show_error(f"Error deleting file: {str(e)}")
@@ -594,32 +595,36 @@ class MainWindow(QMainWindow):
             
             async def fetch_files():
                 try:
-                    files = await self.file_manager.get_all_files()
+                    # Create a new event loop for this operation
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
                     
-                    # Schedule UI update in the main thread
-                    def update_ui():
-                        for metadata in files:
-                            item = QTreeWidgetItem([
-                                metadata.name,
-                                self.format_size(metadata.size),
-                                metadata.owner_name,
-                                "Available" if metadata.is_available else "Unavailable"
-                            ])
-                            item.setData(0, Qt.ItemDataRole.UserRole, metadata)
-                            self.file_list.addTopLevelItem(item)
-                    
-                    QTimer.singleShot(0, update_ui)
+                    try:
+                        files = await self.file_manager.get_all_files()
+                        
+                        # Schedule UI update in the main thread
+                        def update_ui():
+                            for metadata in files:
+                                item = QTreeWidgetItem([
+                                    metadata.name,
+                                    self.format_size(metadata.size),
+                                    metadata.owner_name,
+                                    "Available" if metadata.is_available else "Unavailable"
+                                ])
+                                item.setData(0, Qt.ItemDataRole.UserRole, metadata)
+                                self.file_list.addTopLevelItem(item)
+                        
+                        QTimer.singleShot(0, update_ui)
+                        
+                    finally:
+                        loop.close()
                         
                 except Exception as e:
                     self.logger.error(f"Error fetching files: {e}")
             
-            # Get the event loop and run the async operation
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(fetch_files())
-            else:
-                loop.run_until_complete(fetch_files())
-            
+            # Run the async operation
+            asyncio.run(fetch_files())
+                
         except Exception as e:
             self.logger.error(f"Error updating file list: {e}")
 
