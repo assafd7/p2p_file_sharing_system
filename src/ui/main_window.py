@@ -305,16 +305,25 @@ class MainWindow(QMainWindow):
                     # Broadcast metadata
                     await self.network_manager.broadcast_file_metadata(metadata)
                     
-                    # Update UI
-                    self.update_file_list()
-                    self.show_info(f"Successfully shared file: {metadata.name}")
+                    # Update UI in main thread
+                    def update_ui():
+                        self.update_file_list()
+                        self.show_info(f"Successfully shared file: {metadata.name}")
+                    
+                    QTimer.singleShot(0, update_ui)
                     
                 except Exception as e:
                     self.logger.error(f"Error sharing file: {e}")
-                    self.show_error(f"Failed to share file: {str(e)}")
+                    def show_error():
+                        self.show_error(f"Failed to share file: {str(e)}")
+                    QTimer.singleShot(0, show_error)
             
-            # Run async operation
-            asyncio.create_task(verify_and_update())
+            # Get the event loop and run the async operation
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(verify_and_update())
+            else:
+                loop.run_until_complete(verify_and_update())
             
         except Exception as e:
             self.logger.error(f"Error in share_file: {e}")
@@ -341,7 +350,9 @@ class MainWindow(QMainWindow):
                 try:
                     metadata = await self.file_manager.get_file_metadata(file_id)
                     if not metadata:
-                        self.show_error("File metadata not found")
+                        def show_error():
+                            self.show_error("File metadata not found")
+                        QTimer.singleShot(0, show_error)
                         return
                         
                     # Start transfer
@@ -352,23 +363,31 @@ class MainWindow(QMainWindow):
                     )
                     
                     # Create transfer worker
-                    worker = TransferWorker(transfer_id, self.file_manager)
-                    worker.progress_updated.connect(self.update_transfer_progress)
-                    worker.transfer_completed.connect(self.on_transfer_completed)
-                    worker.start()
+                    def create_worker():
+                        worker = TransferWorker(transfer_id, self.file_manager)
+                        worker.progress_updated.connect(self.update_transfer_progress)
+                        worker.transfer_completed.connect(self.on_transfer_completed)
+                        worker.start()
+                        self.transfer_workers[transfer_id] = worker
+                        
+                        # Update UI
+                        self.update_transfer_list()
+                        self.show_info(f"Started downloading: {metadata.name}")
                     
-                    self.transfer_workers[transfer_id] = worker
-                    
-                    # Update UI
-                    self.update_transfer_list()
-                    self.show_info(f"Started downloading: {metadata.name}")
+                    QTimer.singleShot(0, create_worker)
                     
                 except Exception as e:
                     self.logger.error(f"Error starting download: {e}")
-                    self.show_error(f"Failed to start download: {str(e)}")
+                    def show_error():
+                        self.show_error(f"Failed to start download: {str(e)}")
+                    QTimer.singleShot(0, show_error)
             
-            # Run async operation
-            asyncio.create_task(start_download())
+            # Get the event loop and run the async operation
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(start_download())
+            else:
+                loop.run_until_complete(start_download())
             
         except Exception as e:
             self.logger.error(f"Error in download_file: {e}")
@@ -411,18 +430,28 @@ class MainWindow(QMainWindow):
                 try:
                     success = await self.file_manager.remove_file(file_info.file_id)
                     if success:
-                        # Update UI
-                        self.update_file_list()
-                        self.show_info(f"Successfully deleted file: {file_info.name}")
+                        # Update UI in main thread
+                        def update_ui():
+                            self.update_file_list()
+                            self.show_info(f"Successfully deleted file: {file_info.name}")
+                        QTimer.singleShot(0, update_ui)
                     else:
-                        self.show_error("Failed to delete file")
+                        def show_error():
+                            self.show_error("Failed to delete file")
+                        QTimer.singleShot(0, show_error)
                         
                 except Exception as e:
                     self.logger.error(f"Error deleting file: {e}")
-                    self.show_error(f"Failed to delete file: {str(e)}")
+                    def show_error():
+                        self.show_error(f"Failed to delete file: {str(e)}")
+                    QTimer.singleShot(0, show_error)
             
-            # Run async operation
-            asyncio.create_task(perform_deletion())
+            # Get the event loop and run the async operation
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(perform_deletion())
+            else:
+                loop.run_until_complete(perform_deletion())
             
         except Exception as e:
             self.logger.error(f"Error in delete_file: {e}")
@@ -560,21 +589,29 @@ class MainWindow(QMainWindow):
                 try:
                     files = await self.file_manager.get_all_files()
                     
-                    for metadata in files:
-                        item = QTreeWidgetItem([
-                            metadata.name,
-                            self.format_size(metadata.size),
-                            metadata.owner_name,
-                            "Available" if metadata.is_available else "Unavailable"
-                        ])
-                        item.setData(0, Qt.ItemDataRole.UserRole, metadata)
-                        self.file_list.addTopLevelItem(item)
+                    # Schedule UI update in the main thread
+                    def update_ui():
+                        for metadata in files:
+                            item = QTreeWidgetItem([
+                                metadata.name,
+                                self.format_size(metadata.size),
+                                metadata.owner_name,
+                                "Available" if metadata.is_available else "Unavailable"
+                            ])
+                            item.setData(0, Qt.ItemDataRole.UserRole, metadata)
+                            self.file_list.addTopLevelItem(item)
+                    
+                    QTimer.singleShot(0, update_ui)
                         
                 except Exception as e:
                     self.logger.error(f"Error fetching files: {e}")
             
-            # Run async operation
-            asyncio.create_task(fetch_files())
+            # Get the event loop and run the async operation
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(fetch_files())
+            else:
+                loop.run_until_complete(fetch_files())
             
         except Exception as e:
             self.logger.error(f"Error updating file list: {e}")
