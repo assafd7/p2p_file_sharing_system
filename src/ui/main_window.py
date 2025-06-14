@@ -296,21 +296,29 @@ class MainWindow(QMainWindow):
             # Create metadata
             async def verify_and_update():
                 try:
-                    metadata = await self.file_manager.add_file(
-                        file_path,
-                        self.user_id,
-                        self.username
-                    )
+                    # Create a new event loop for this operation
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
                     
-                    # Broadcast metadata
-                    await self.network_manager.broadcast_file_metadata(metadata)
-                    
-                    # Update UI in main thread
-                    def update_ui():
-                        self.update_file_list()
-                        self.show_info(f"Successfully shared file: {metadata.name}")
-                    
-                    QTimer.singleShot(0, update_ui)
+                    try:
+                        metadata = await self.file_manager.add_file(
+                            file_path,
+                            self.user_id,
+                            self.username
+                        )
+                        
+                        # Broadcast metadata
+                        await self.network_manager.broadcast_file_metadata(metadata)
+                        
+                        # Update UI in main thread
+                        def update_ui():
+                            self.update_file_list()
+                            self.show_info(f"Successfully shared file: {metadata.name}")
+                        
+                        QTimer.singleShot(0, update_ui)
+                        
+                    finally:
+                        loop.close()
                     
                 except Exception as error:
                     error_msg = str(error)
@@ -320,12 +328,8 @@ class MainWindow(QMainWindow):
                         self.show_error(f"Failed to share file: {error_msg}")
                     QTimer.singleShot(0, show_error)
             
-            # Get the event loop and run the async operation
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(verify_and_update())
-            else:
-                loop.run_until_complete(verify_and_update())
+            # Run the async operation
+            asyncio.run(verify_and_update())
             
         except Exception as error:
             error_msg = str(error)
