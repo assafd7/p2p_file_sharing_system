@@ -66,6 +66,7 @@ class DHT:
         self._running = False
         self._lock = asyncio.Lock()
         self._cleanup_task = None
+        self._seen_metadata: Set[str] = set()  # Track seen metadata to prevent loops
         
         # Initialize message handlers
         self.message_handlers = {
@@ -868,3 +869,43 @@ class DHT:
         except Exception as e:
             self.logger.error(f"Error handling file metadata response: {e}")
             raise
+
+    async def has_seen_metadata(self, metadata: FileMetadata) -> bool:
+        """Check if we've seen this metadata before."""
+        metadata_id = f"{metadata.file_id}_{metadata.owner_id}"
+        return metadata_id in self._seen_metadata
+
+    async def mark_metadata_seen(self, metadata: FileMetadata, peer_id: str) -> None:
+        """Mark metadata as seen from a specific peer."""
+        metadata_id = f"{metadata.file_id}_{metadata.owner_id}"
+        self._seen_metadata.add(metadata_id)
+        self.logger.debug(f"Marked metadata as seen: {metadata_id} from peer {peer_id}")
+
+    async def add_metadata(self, metadata: FileMetadata) -> None:
+        """Add metadata to storage."""
+        try:
+            if self.db_manager:
+                # Store in database
+                await self.db_manager.store_file_metadata(metadata)
+                self.logger.debug(f"Stored metadata in database: {metadata.name}")
+            else:
+                self.logger.warning("No database manager available for storing metadata")
+        except Exception as e:
+            self.logger.error(f"Error storing metadata: {e}")
+            raise
+
+    async def get_metadata(self, file_id: str) -> Optional[FileMetadata]:
+        """Get metadata from storage."""
+        try:
+            if self.db_manager:
+                # Get from database
+                metadata = await self.db_manager.get_file_metadata(file_id)
+                if metadata:
+                    self.logger.debug(f"Retrieved metadata from database: {metadata.name}")
+                return metadata
+            else:
+                self.logger.warning("No database manager available for retrieving metadata")
+                return None
+        except Exception as e:
+            self.logger.error(f"Error retrieving metadata: {e}")
+            return None

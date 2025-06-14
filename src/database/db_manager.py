@@ -487,13 +487,64 @@ class DatabaseManager:
                 return [dict(row) for row in rows]
 
     async def get_connected_peers(self) -> List[Dict]:
-        """Get all connected peers."""
+        """Get a list of currently connected peers."""
         async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = sqlite3.Row
-            async with db.execute('''
-                SELECT * FROM peers
-                WHERE is_connected = 1
-                ORDER BY last_seen DESC
-            ''') as cursor:
+            async with db.execute(
+                "SELECT * FROM peers WHERE is_connected = 1"
+            ) as cursor:
                 rows = await cursor.fetchall()
-                return [dict(row) for row in rows] 
+                return [dict(row) for row in rows]
+
+    async def store_file_metadata(self, metadata: 'FileMetadata') -> None:
+        """Store file metadata in the database."""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                # Convert metadata to dict
+                metadata_dict = metadata.to_dict()
+                
+                # Store in files table
+                await db.execute('''
+                    INSERT OR REPLACE INTO files (
+                        hash, name, size, created_at, modified_at,
+                        owner_id, permissions, metadata
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    metadata.file_id,
+                    metadata.name,
+                    metadata.size,
+                    metadata.created_at.isoformat(),
+                    metadata.modified_at.isoformat(),
+                    metadata.owner_id,
+                    json.dumps(metadata.permissions),
+                    json.dumps(metadata_dict)
+                ))
+                
+                await db.commit()
+                self.logger.debug(f"Stored metadata for file: {metadata.name}")
+        except Exception as e:
+            self.logger.error(f"Error storing file metadata: {e}")
+            raise
+
+    async def get_file_metadata(self, file_id: str) -> Optional['FileMetadata']:
+        """Get file metadata from the database."""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                async with db.execute(
+                    "SELECT * FROM files WHERE hash = ?",
+                    (file_id,)
+                ) as cursor:
+                    row = await cursor.fetchone()
+                    if row:
+                        # Convert row to dict
+                        file_data = dict(row)
+                        
+                        # Parse metadata
+                        metadata = json.loads(file_data['metadata'])
+                        
+                        # Create FileMetadata object
+                        from src.file_management.file_metadata import FileMetadata
+                        return FileMetadata.from_dict(metadata)
+                    return None
+        except Exception as e:
+            self.logger.error(f"Error retrieving file metadata: {e}")
+            return None 
