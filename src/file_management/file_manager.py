@@ -62,6 +62,14 @@ class FileManager:
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
     
+    async def _calculate_file_hash(self, file_path: str) -> str:
+        """Calculate SHA-256 hash of a file."""
+        sha256_hash = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+        return sha256_hash.hexdigest()
+    
     async def add_file(self, file_path: str, owner_id: str, owner_name: str) -> Optional[FileMetadata]:
         """Add a file to the shared files."""
         self.logger.info(f"Starting to add file: {file_path}")
