@@ -300,7 +300,7 @@ class MainWindow(QMainWindow):
         
         # Show progress dialog
         progress = QProgressDialog("Adding file...", "Cancel", 0, 0, self)
-        progress.setWindowModality(Qt.WindowModal)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setWindowTitle("Adding File")
         progress.setMinimumDuration(0)
         progress.show()

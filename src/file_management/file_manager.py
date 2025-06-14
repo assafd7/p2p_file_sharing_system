@@ -79,27 +79,12 @@ class FileManager:
                 self.logger.error(f"File does not exist: {file_path}")
                 raise FileNotFoundError(f"File not found: {file_path}")
             
-            # Get file info
-            file_size = os.path.getsize(file_path)
-            self.logger.debug(f"File size: {file_size} bytes")
-            
-            # Calculate file hash
-            self.logger.debug("Calculating file hash...")
-            file_hash = await self._calculate_file_hash(file_path)
-            self.logger.debug(f"File hash calculated: {file_hash}")
-            
             # Create metadata
             self.logger.debug("Creating file metadata...")
-            metadata = FileMetadata(
-                file_id=str(uuid.uuid4()),
-                name=os.path.basename(file_path),
-                size=file_size,
-                hash=file_hash,
-                owner_id=owner_id,
-                owner_name=owner_name,
-                upload_time=datetime.now(),
-                is_available=True,
-                ttl=5  # TTL for broadcasting
+            metadata = await self.metadata_manager.create_metadata(
+                Path(file_path),
+                owner_id,
+                owner_name
             )
             self.logger.debug(f"Metadata created with ID: {metadata.file_id}")
             
