@@ -175,14 +175,18 @@ class DHT:
             
     def _register_message_handlers(self):
         """Register message handlers for the DHT."""
-        # Get the local peer instance
-        local_peer = self.get_local_peer()
-        if local_peer:
-            # Register handlers for different message types
-            local_peer.register_message_handler(MessageType.PEER_LIST, self.handle_peer_list)
-            local_peer.register_message_handler(MessageType.HEARTBEAT, self._handle_heartbeat)
-            local_peer.register_message_handler(MessageType.GOODBYE, self._handle_goodbye)
-            
+        # Register handlers for different message types
+        self.message_handlers = {
+            MessageType.PEER_LIST: self._handle_peer_list,
+            MessageType.HEARTBEAT: self._handle_heartbeat,
+            MessageType.GOODBYE: self._handle_goodbye,
+            MessageType.USER_INFO: self._handle_user_info,
+            MessageType.FILE_METADATA: self._handle_file_metadata,
+            MessageType.FILE_METADATA_REQUEST: self._handle_file_metadata_request,
+            MessageType.FILE_METADATA_RESPONSE: self._handle_file_metadata_response
+        }
+        self.logger.debug("Registered message handlers")
+
     async def _handle_peer_list(self, message: Message, peer: Peer):
         """Handle peer list message."""
         try:
