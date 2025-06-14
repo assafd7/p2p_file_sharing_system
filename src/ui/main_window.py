@@ -503,40 +503,52 @@ class MainWindow(QMainWindow):
                 self.show_error(f"Error cancelling transfer: {e}")
 
     def connect_to_peer(self):
-        """Connect to a peer using the specified address."""
+        """Handle peer connection."""
         try:
-            # Get peer address from user
-            address, ok = QInputDialog.getText(
-                self, "Connect to Peer", "Enter peer address (host:port):"
-            )
+            # Get selected peer
+            selected_items = self.peer_list.selectedItems()
+            if not selected_items:
+                self.show_error("Please select a peer to connect to")
+                return
+                
+            peer_id = selected_items[0].data(0, Qt.ItemDataRole.UserRole)
             
-            if not ok or not address:
-                return
-                
-            # Parse address
-            try:
-                host, port_str = address.split(":")
-                port = int(port_str)
-            except ValueError:
-                self.show_error("Invalid address format. Please use host:port")
-                return
-                
-            # Attempt connection
+            # Create a new event loop for this operation
             async def connect():
-                success = await self.network_manager.connect_to_peer(host, port)
-                if success:
-                    self.show_info(f"Successfully connected to {address}")
-                    self.update_peer_list()  # Refresh peer list
-                else:
-                    self.show_error(f"Failed to connect to {address}")
+                try:
+                    # Create a new event loop for this operation
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    
+                    try:
+                        # Connect to peer
+                        await self.network_manager.connect_to_peer(peer_id)
+                        
+                        # Update UI in main thread
+                        def update_ui():
+                            self.update_peer_list()
+                            self.show_info(f"Successfully connected to peer: {peer_id}")
+                        
+                        QTimer.singleShot(0, update_ui)
+                        
+                    finally:
+                        loop.close()
+                        
+                except Exception as e:
+                    error_msg = str(e)
+                    self.logger.error(f"Error connecting to peer: {error_msg}")
+                    
+                    def show_error():
+                        self.show_error(f"Failed to connect to peer: {error_msg}")
+                    QTimer.singleShot(0, show_error)
             
-            # Run connection in event loop
-            loop = asyncio.get_event_loop()
-            loop.create_task(connect())
+            # Run the async operation
+            asyncio.run(connect())
             
         except Exception as e:
-            self.logger.error(f"Error connecting to peer: {e}")
-            self.show_error(f"Error connecting to peer: {str(e)}")
+            error_msg = str(e)
+            self.logger.error(f"Error in connect_to_peer: {error_msg}")
+            self.show_error(f"Error connecting to peer: {error_msg}")
 
     def disconnect_from_peer(self):
         """Disconnect from a selected peer."""
