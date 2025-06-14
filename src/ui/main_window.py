@@ -313,9 +313,11 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(0, update_ui)
                     
                 except Exception as error:
-                    self.logger.error(f"Error sharing file: {error}")
+                    error_msg = str(error)
+                    self.logger.error(f"Error sharing file: {error_msg}")
+                    
                     def show_error():
-                        self.show_error(f"Failed to share file: {str(error)}")
+                        self.show_error(f"Failed to share file: {error_msg}")
                     QTimer.singleShot(0, show_error)
             
             # Get the event loop and run the async operation
@@ -326,8 +328,9 @@ class MainWindow(QMainWindow):
                 loop.run_until_complete(verify_and_update())
             
         except Exception as error:
-            self.logger.error(f"Error in share_file: {error}")
-            self.show_error(f"Error sharing file: {str(error)}")
+            error_msg = str(error)
+            self.logger.error(f"Error in share_file: {error_msg}")
+            self.show_error(f"Error sharing file: {error_msg}")
 
     def download_file(self):
         """Handle file download."""
