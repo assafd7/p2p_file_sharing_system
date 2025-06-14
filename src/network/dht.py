@@ -684,6 +684,7 @@ class DHT:
                 # Read message length
                 length_data = await peer.reader.read(4)
                 if not length_data:
+                    self.logger.info(f"Peer {peer.id} closed connection")
                     break
                     
                 length = int.from_bytes(length_data, 'big')
@@ -691,6 +692,7 @@ class DHT:
                 # Read message data
                 data = await peer.reader.read(length)
                 if not data:
+                    self.logger.info(f"Peer {peer.id} closed connection")
                     break
                     
                 # Parse message
@@ -702,11 +704,14 @@ class DHT:
                 else:
                     self.logger.warning(f"No handler for message type: {message.type}")
                     
+        except ConnectionError as e:
+            self.logger.info(f"Connection closed by peer {peer.id}: {e}")
         except Exception as e:
             self.logger.error(f"Error processing messages from peer {peer.id}: {e}")
         finally:
-            # Clean up peer connection
-            await self._handle_peer_disconnect(peer)
+            # Only clean up if the peer is still in our list
+            if peer.id in self.peers:
+                await self._handle_peer_disconnect(peer)
 
     async def _handle_peer_disconnect(self, peer: Peer):
         """Handle peer disconnection."""
@@ -791,6 +796,10 @@ class DHT:
             # Store metadata
             await self.add_metadata(metadata)
             
+            # Notify UI if callback exists
+            if hasattr(self, 'on_file_metadata_received'):
+                self.on_file_metadata_received(metadata)
+            
             # Forward to other peers if TTL > 0
             if metadata.ttl > 0:
                 metadata.ttl -= 1
@@ -809,7 +818,7 @@ class DHT:
                             
         except Exception as e:
             self.logger.error(f"Error handling file metadata: {e}")
-            raise
+            # Don't raise the exception to keep the connection alive
 
     async def _handle_file_metadata_request(self, message: Message, peer: Peer) -> None:
         """Handle file metadata request message."""
