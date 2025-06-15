@@ -753,18 +753,23 @@ class DHT:
         """Send a message to a peer."""
         try:
             if not peer.writer or peer.writer.is_closing():
+                self.logger.error(f"Cannot send message to peer {peer.id}: connection is closed")
                 raise ConnectionError("Peer connection is closed")
                 
             # Serialize message
+            self.logger.debug(f"Preparing to send message to peer {peer.id}: type={message.type}")
             data = message.serialize()
             
             # Send message length
             length = len(data)
+            self.logger.debug(f"Sending message length {length} to peer {peer.id}")
             peer.writer.write(length.to_bytes(4, 'big'))
             
             # Send message data
+            self.logger.debug(f"Sending message data to peer {peer.id}")
             peer.writer.write(data)
             await peer.writer.drain()
+            self.logger.debug(f"Successfully sent message to peer {peer.id}")
             
         except Exception as e:
             self.logger.error(f"Error sending message to peer {peer.id}: {e}")
@@ -774,7 +779,7 @@ class DHT:
     async def broadcast_file_metadata(self, metadata: 'FileMetadata') -> None:
         """Broadcast file metadata to all connected peers."""
         try:
-            self.logger.info(f"Broadcasting file metadata: {metadata.name}")
+            self.logger.info(f"Starting broadcast of file metadata: {metadata.name}")
             
             # Create the message
             message = Message(
@@ -782,12 +787,17 @@ class DHT:
                 sender_id=self.node_id,
                 payload=metadata.to_dict()
             )
+            self.logger.debug(f"Created file metadata message for {metadata.name}")
             
             # Send to all connected peers
-            for peer in self.get_connected_peers():
+            connected_peers = self.get_connected_peers()
+            self.logger.debug(f"Broadcasting to {len(connected_peers)} connected peers")
+            
+            for peer in connected_peers:
                 try:
+                    self.logger.debug(f"Sending file metadata to peer {peer.id}")
                     await self.send_message(message, peer)
-                    self.logger.debug(f"Sent file metadata to peer {peer.id}")
+                    self.logger.debug(f"Successfully sent file metadata to peer {peer.id}")
                 except Exception as e:
                     self.logger.error(f"Error sending file metadata to peer {peer.id}: {e}")
                     
@@ -799,6 +809,7 @@ class DHT:
         """Handle incoming file metadata message."""
         try:
             self.logger.info(f"Received file metadata from peer {peer.id}")
+            self.logger.debug(f"Message payload: {message.payload}")
             
             # Parse metadata
             metadata = FileMetadata.from_dict(message.payload)
@@ -834,6 +845,7 @@ class DHT:
                                 sender_id=self.node_id,
                                 payload=metadata.to_dict()
                             )
+                            self.logger.debug(f"Created forward message for peer {other_peer.id}")
                             await self.send_message(forward_message, other_peer)
                             self.logger.debug(f"Forwarded file metadata to peer {other_peer.id}")
                         except Exception as e:
