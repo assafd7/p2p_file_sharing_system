@@ -9,9 +9,6 @@ from .protocol import Message, MessageType
 from .peer import Peer, PeerInfo
 from src.database.db_manager import DatabaseManager
 from src.file_management.file_metadata import FileMetadata
-import traceback
-import socket
-import json
 
 class DHTError(Exception):
     """Base exception class for DHT-related errors."""
@@ -809,75 +806,42 @@ class DHT:
             raise
 
     async def _handle_file_metadata(self, message: Message, peer: Peer) -> None:
-        """Handle incoming file metadata message."""
+        """Handle incoming file metadata"""
+        self.logger.debug(f"Handling file metadata from peer {peer.address}:{peer.port}")
         try:
-            self.logger.debug(f"Handling file metadata from peer {peer.address}:{peer.port}")
-            metadata_dict = message.payload
-            self.logger.debug(f"Received metadata for file: {metadata_dict.get('name')}")
-            self.logger.debug(f"Full metadata: {metadata_dict}")
-            
-            # Create a unique identifier for this metadata
-            metadata_id = f"{metadata_dict['hash']}_{metadata_dict['owner_id']}"
-            self.logger.debug(f"Marking metadata as seen: {metadata_id}")
+            metadata = message.payload
+            self.logger.debug(f"Received metadata for file: {metadata.get('name')}")
+            self.logger.debug(f"Full metadata: {metadata}")
             
             # Check if we've seen this metadata before
+            metadata_id = f"{metadata['hash']}_{metadata['owner_id']}"
             if metadata_id in self._seen_metadata:
-                self.logger.debug(f"Already seen metadata for file {metadata_dict.get('name')}")
+                self.logger.debug(f"Already seen metadata for file {metadata['name']}, skipping")
                 return
-                
-            # Mark as seen
-            self._seen_metadata.add(metadata_id)
             
-            # Convert dictionary to FileMetadata object
-            metadata = FileMetadata(
-                file_id=metadata_dict['file_id'],
-                name=metadata_dict['name'],
-                size=metadata_dict['size'],
-                hash=metadata_dict['hash'],
-                owner_id=metadata_dict['owner_id'],
-                owner_name=metadata_dict['owner_name'],
-                upload_time=datetime.fromisoformat(metadata_dict['upload_time']),
-                is_available=metadata_dict['is_available'],
-                ttl=metadata_dict['ttl'],
-                seen_by=metadata_dict.get('seen_by', []),
-                chunks=[FileChunk(**chunk) for chunk in metadata_dict.get('chunks', [])]
-            )
+            self.logger.debug(f"Marking metadata as seen: {metadata_id}")
+            self._seen_metadata.add(metadata_id)
             
             # Store metadata in database
             self.logger.debug("Storing metadata in database")
             await self.db_manager.store_file_metadata(metadata)
+            self.logger.debug("Successfully stored metadata in database")
             
             # Notify UI if callback exists
-            if self.on_file_metadata_received:
-                self.logger.debug("Notifying UI of new file metadata")
+            if hasattr(self, 'on_file_metadata_received'):
+                self.logger.debug("Notifying UI about new file metadata")
                 self.on_file_metadata_received(metadata)
+                self.logger.debug("UI notification complete")
             
-            # Forward to other peers if TTL > 0
-            if metadata.ttl > 0:
-                self.logger.debug(f"Forwarding metadata to other peers (TTL: {metadata.ttl})")
-                # Create a new message with decremented TTL
-                forward_metadata = metadata_dict.copy()
-                forward_metadata['ttl'] = metadata.ttl - 1
-                forward_metadata['seen_by'] = forward_metadata.get('seen_by', []) + [f"{peer.address}:{peer.port}"]
-                
-                # Create and send the message
-                forward_message = Message(
-                    type=MessageType.FILE_METADATA,
-                    sender_id=f"{self.host}:{self.port}",
-                    payload=forward_metadata
-                )
-                
-                # Forward to all peers except the sender
-                for other_peer in self.peers.values():
-                    if other_peer != peer:
-                        self.logger.debug(f"Forwarding metadata to peer {other_peer.address}:{other_peer.port}")
-                        await self._send_message(forward_message, other_peer)
-            
-            self.logger.debug(f"Finished handling message of type {message.type} from peer {peer.address}:{peer.port}")
+            # Forward metadata to other peers if TTL > 0
+            if metadata.get('ttl', 0) > 0:
+                self.logger.debug(f"Forwarding metadata (TTL: {metadata['ttl']})")
+                metadata['ttl'] -= 1
+                await self._broadcast_metadata(metadata, exclude_peer=peer)
+                self.logger.debug("Metadata forwarding complete")
             
         except Exception as e:
-            self.logger.error(f"Error handling file metadata: {str(e)}")
-            self.logger.error(traceback.format_exc())
+            self.logger.error(f"Error handling file metadata: {str(e)}", exc_info=True)
 
     async def _handle_file_metadata_request(self, message: Message, peer: Peer) -> None:
         """Handle file metadata request message."""
