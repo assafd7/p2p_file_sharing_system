@@ -499,10 +499,8 @@ class DatabaseManager:
         """Store file metadata in the database."""
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                # Convert metadata to dict
+                # Convert metadata to dict and store in database
                 metadata_dict = metadata.to_dict()
-                
-                # Store in files table
                 await db.execute('''
                     INSERT OR REPLACE INTO files (
                         hash, name, size, created_at, modified_at,
@@ -512,15 +510,14 @@ class DatabaseManager:
                     metadata.file_id,
                     metadata.name,
                     metadata.size,
-                    metadata.created_at.isoformat(),
-                    metadata.modified_at.isoformat(),
+                    metadata.upload_time.isoformat(),  # Use upload_time for created_at
+                    metadata.upload_time.isoformat(),  # Use upload_time for modified_at
                     metadata.owner_id,
-                    json.dumps(metadata.permissions),
+                    json.dumps({"read": ["*"], "write": [metadata.owner_id]}),  # Default permissions
                     json.dumps(metadata_dict)
                 ))
-                
                 await db.commit()
-                self.logger.debug(f"Stored metadata for file: {metadata.name}")
+                self.logger.info(f"Stored metadata for file {metadata.name}")
         except Exception as e:
             self.logger.error(f"Error storing file metadata: {e}")
             raise
