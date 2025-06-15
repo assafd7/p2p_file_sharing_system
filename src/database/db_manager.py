@@ -615,37 +615,36 @@ class DatabaseManager:
             self.logger.error(f"Error retrieving file metadata: {e}")
             return None
 
-    async def get_all_files(self) -> List['FileMetadata']:
-        """Get all shared files from the database."""
+    async def get_all_files(self):
+        """Fetch all files from the files table and return as a list of FileMetadata objects."""
         try:
+            from src.file_management.file_metadata import FileMetadata, FileChunk
+            import json
+            from datetime import datetime
+            files = []
             async with aiosqlite.connect(self.db_path) as db:
                 async with db.execute("SELECT * FROM files") as cursor:
-                    rows = await cursor.fetchall()
-                    files = []
-                    for row in rows:
-                        # Convert row to dict
-                        file_data = dict(zip([col[0] for col in cursor.description], row))
-                        
+                    columns = [col[0] for col in cursor.description]
+                    async for row in cursor:
+                        file_data = dict(zip(columns, row))
                         # Parse JSON fields
-                        seen_by = json.loads(file_data['seen_by']) if file_data['seen_by'] else []
-                        chunks_data = json.loads(file_data['chunks']) if file_data['chunks'] else []
-                        
+                        seen_by = json.loads(file_data['seen_by']) if file_data.get('seen_by') else []
+                        chunks_data = json.loads(file_data['chunks']) if file_data.get('chunks') else []
                         # Create FileMetadata object
-                        from src.file_management.file_metadata import FileMetadata, FileChunk
                         files.append(FileMetadata(
                             file_id=file_data['file_id'],
                             name=file_data['name'],
                             size=file_data['size'],
                             hash=file_data['hash'],
                             owner_id=file_data['owner_id'],
-                            owner_name=file_data['owner_name'],
-                            upload_time=datetime.fromisoformat(file_data['upload_time']),
-                            is_available=bool(file_data['is_available']),
-                            ttl=int(file_data['ttl']),
+                            owner_name=file_data.get('owner_name', 'Unknown'),
+                            upload_time=datetime.fromisoformat(file_data['upload_time']) if file_data.get('upload_time') else None,
+                            is_available=bool(file_data.get('is_available', 1)),
+                            ttl=file_data.get('ttl', 10),
                             seen_by=set(seen_by),
-                            chunks=[FileChunk(**chunk) for chunk in chunks_data]
+                            chunks=[FileChunk(**chunk) for chunk in chunks_data],
                         ))
-                    return files
+            return files
         except Exception as e:
-            self.logger.error(f"Error retrieving all files: {e}")
+            self.logger.error(f"Error fetching all files: {e}")
             return [] 
