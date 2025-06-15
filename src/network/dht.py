@@ -841,7 +841,7 @@ class DHT:
             if metadata.ttl > 0:
                 self.logger.debug(f"Forwarding metadata (TTL: {metadata.ttl})")
                 metadata.ttl -= 1
-                await self._broadcast_metadata(metadata.to_dict(), exclude_peer=peer)
+                await self.broadcast_file_metadata(metadata)
                 self.logger.debug("Metadata forwarding complete")
             
         except Exception as e:
