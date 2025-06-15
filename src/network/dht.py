@@ -806,56 +806,42 @@ class DHT:
             raise
 
     async def _handle_file_metadata(self, message: Message, peer: Peer) -> None:
-        """Handle incoming file metadata message."""
+        """Handle incoming file metadata"""
+        self.logger.debug(f"Handling file metadata from peer {peer.address}:{peer.port}")
         try:
-            self.logger.info(f"Received file metadata from peer {peer.id}")
-            self.logger.debug(f"Message payload: {message.payload}")
-            
-            # Parse metadata
-            metadata = FileMetadata.from_dict(message.payload)
-            self.logger.debug(f"Parsed metadata for file: {metadata.name} (ID: {metadata.file_id})")
+            metadata = message.payload
+            self.logger.debug(f"Received metadata for file: {metadata.get('name')}")
+            self.logger.debug(f"Full metadata: {metadata}")
             
             # Check if we've seen this metadata before
-            if await self.has_seen_metadata(metadata):
-                self.logger.debug(f"Already seen metadata for file {metadata.name}")
+            metadata_id = f"{metadata['hash']}_{metadata['owner_id']}"
+            if metadata_id in self._seen_metadata:
+                self.logger.debug(f"Already seen metadata for file {metadata['name']}, skipping")
                 return
-                
-            # Mark metadata as seen
-            await self.mark_metadata_seen(metadata, peer.id)
-            self.logger.debug(f"Marked metadata as seen for file {metadata.name}")
             
-            # Store metadata
-            await self.add_metadata(metadata)
-            self.logger.debug(f"Stored metadata for file {metadata.name}")
+            self.logger.debug(f"Marking metadata as seen: {metadata_id}")
+            self._seen_metadata.add(metadata_id)
+            
+            # Store metadata in database
+            self.logger.debug("Storing metadata in database")
+            await self.db_manager.store_file_metadata(metadata)
+            self.logger.debug("Successfully stored metadata in database")
             
             # Notify UI if callback exists
             if hasattr(self, 'on_file_metadata_received'):
-                self.logger.debug(f"Notifying UI about new file: {metadata.name}")
+                self.logger.debug("Notifying UI about new file metadata")
                 self.on_file_metadata_received(metadata)
+                self.logger.debug("UI notification complete")
             
-            # Forward to other peers if TTL > 0
-            if metadata.ttl > 0:
-                metadata.ttl -= 1
-                self.logger.debug(f"Forwarding metadata for file {metadata.name} (TTL: {metadata.ttl})")
-                for other_peer in self.get_connected_peers():
-                    if other_peer.id != peer.id:
-                        try:
-                            forward_message = Message(
-                                type=MessageType.FILE_METADATA,
-                                sender_id=self.node_id,
-                                payload=metadata.to_dict()
-                            )
-                            self.logger.debug(f"Created forward message for peer {other_peer.id}")
-                            await self.send_message(forward_message, other_peer)
-                            self.logger.debug(f"Forwarded file metadata to peer {other_peer.id}")
-                        except Exception as e:
-                            self.logger.error(f"Error forwarding file metadata to peer {other_peer.id}: {e}")
-            else:
-                self.logger.debug(f"Not forwarding metadata for file {metadata.name} (TTL expired)")
-                            
+            # Forward metadata to other peers if TTL > 0
+            if metadata.get('ttl', 0) > 0:
+                self.logger.debug(f"Forwarding metadata (TTL: {metadata['ttl']})")
+                metadata['ttl'] -= 1
+                await self._broadcast_metadata(metadata, exclude_peer=peer)
+                self.logger.debug("Metadata forwarding complete")
+            
         except Exception as e:
-            self.logger.error(f"Error handling file metadata: {e}")
-            # Don't raise the exception to keep the connection alive
+            self.logger.error(f"Error handling file metadata: {str(e)}", exc_info=True)
 
     async def _handle_file_metadata_request(self, message: Message, peer: Peer) -> None:
         """Handle file metadata request message."""

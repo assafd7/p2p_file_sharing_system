@@ -159,8 +159,17 @@ class FileManager:
         return self.storage_dir / file_id
     
     async def get_shared_files(self) -> List[FileMetadata]:
-        """Get list of all shared files."""
-        return await self.metadata_manager.get_all_metadata()
+        """Get all shared files"""
+        self.logger.debug("Getting shared files")
+        try:
+            files = await self.metadata_manager.get_all_metadata()
+            self.logger.debug(f"Retrieved {len(files)} files from metadata manager")
+            for file in files:
+                self.logger.debug(f"File details: {file}")
+            return files
+        except Exception as e:
+            self.logger.error(f"Error getting shared files: {str(e)}", exc_info=True)
+            return []
     
     async def get_file_metadata(self, file_id: str) -> Optional[FileMetadata]:
         """Get metadata for a specific file."""
