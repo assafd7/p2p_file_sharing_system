@@ -21,10 +21,15 @@ class FileMetadata:
     is_available: bool = True # Whether the file is currently available
     ttl: int = 10  # Time-to-live for broadcasting
     seen_by: Set[str] = None  # Set of peer IDs that have seen this metadata
+    chunks: List['FileChunk'] = None  # List of file chunks
     
     def __post_init__(self):
         if self.seen_by is None:
             self.seen_by = set()
+        if self.chunks is None:
+            self.chunks = []
+        if self.file_id is None:
+            self.file_id = self.hash
     
     def to_dict(self) -> Dict:
         """Convert metadata to dictionary for serialization."""
@@ -109,9 +114,23 @@ class FileMetadataManager:
         try:
             # Calculate file hash
             file_hash = hashlib.sha256()
+            chunks = []
+            chunk_index = 0
+            
             with open(file_path, 'rb') as f:
-                for chunk in iter(lambda: f.read(8192), b''):
-                    file_hash.update(chunk)
+                while True:
+                    chunk_data = f.read(8192)
+                    if not chunk_data:
+                        break
+                    file_hash.update(chunk_data)
+                    chunk_hash = hashlib.sha256(chunk_data).hexdigest()
+                    chunks.append(FileChunk(
+                        index=chunk_index,
+                        hash=chunk_hash,
+                        size=len(chunk_data)
+                    ))
+                    chunk_index += 1
+            
             file_id = file_hash.hexdigest()
             
             # Create metadata
@@ -123,7 +142,8 @@ class FileMetadataManager:
                 owner_id=owner_id,
                 owner_name=owner_name,
                 upload_time=datetime.now(),
-                is_available=True
+                is_available=True,
+                chunks=chunks
             )
         except Exception as e:
             self.logger.error(f"Error creating metadata: {e}")

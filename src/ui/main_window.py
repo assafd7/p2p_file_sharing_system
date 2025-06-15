@@ -57,6 +57,9 @@ class MainWindow(QMainWindow):
         self.logger = logging.getLogger(__name__)
         self.transfer_workers: Dict[str, TransferWorker] = {}
 
+        # Set up network manager callbacks
+        self.network_manager.on_file_metadata_received = self.on_file_metadata_received
+
         # Set window properties
         self.setWindowTitle("P2P File Sharing System")
         self.setGeometry(100, 100, 800, 600)
@@ -620,14 +623,14 @@ class MainWindow(QMainWindow):
             try:
                 files = await self.file_manager.get_shared_files()
                 self.file_list.clear()
-                for file_info in files:
+                for metadata in files:
                     item = QTreeWidgetItem([
-                        file_info['name'],
-                        self.format_size(file_info['size']),
-                        file_info['owner_name'],
-                        "Available" if file_info['is_available'] else "Unavailable"
+                        metadata.name,
+                        self.format_size(metadata.size),
+                        metadata.owner_name,
+                        "Available" if metadata.is_available else "Unavailable"
                     ])
-                    item.setData(0, Qt.ItemDataRole.UserRole, file_info)
+                    item.setData(0, Qt.ItemDataRole.UserRole, metadata)
                     self.file_list.addTopLevelItem(item)
                 
                 # Resize columns to fit content
@@ -780,4 +783,10 @@ class MainWindow(QMainWindow):
     def on_transfer_completed(self, transfer_id, success):
         """Handle transfer completion."""
         # Implementation of on_transfer_completed method
-        pass 
+        pass
+
+    def on_file_metadata_received(self, metadata):
+        """Handle received file metadata."""
+        self.logger.info(f"Received file metadata: {metadata.name}")
+        # Schedule UI update in the main thread
+        QTimer.singleShot(0, self.update_file_list) 
