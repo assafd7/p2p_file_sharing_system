@@ -62,45 +62,62 @@ class DatabaseManager:
 
     def _create_tables(self):
         """Create necessary database tables if they don't exist."""
-        with self.get_connection() as conn:
-            # Create peers table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS peers (
-                    id TEXT PRIMARY KEY,
-                    address TEXT NOT NULL,
-                    port INTEGER NOT NULL,
-                    username TEXT,
-                    is_connected BOOLEAN DEFAULT 1,
-                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            
-            # Create files table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS files (
-                    hash TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    size INTEGER NOT NULL,
-                    owner_id TEXT NOT NULL,
-                    shared BOOLEAN DEFAULT 0,
-                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (owner_id) REFERENCES peers(id)
-                )
-            """)
-            
-            # Create file_peers table for tracking which peers have which files
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS file_peers (
-                    file_hash TEXT,
-                    peer_id TEXT,
-                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (file_hash, peer_id),
-                    FOREIGN KEY (file_hash) REFERENCES files(hash),
-                    FOREIGN KEY (peer_id) REFERENCES peers(id)
-                )
-            """)
-            
-            conn.commit()
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                # Create files table
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS files (
+                        hash TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        size INTEGER NOT NULL,
+                        created_at TEXT NOT NULL,
+                        modified_at TEXT NOT NULL,
+                        owner_id TEXT NOT NULL,
+                        owner_name TEXT NOT NULL,
+                        upload_time TEXT NOT NULL,
+                        is_available BOOLEAN NOT NULL DEFAULT 1,
+                        ttl INTEGER NOT NULL DEFAULT 10,
+                        seen_by TEXT NOT NULL DEFAULT '[]',
+                        chunks TEXT NOT NULL DEFAULT '[]',
+                        metadata TEXT NOT NULL
+                    )
+                ''')
+                
+                # Create peers table
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS peers (
+                        id TEXT PRIMARY KEY,
+                        host TEXT NOT NULL,
+                        port INTEGER NOT NULL,
+                        username TEXT,
+                        last_seen TEXT NOT NULL,
+                        is_connected BOOLEAN NOT NULL DEFAULT 0
+                    )
+                ''')
+                
+                # Create transfers table
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS transfers (
+                        id TEXT PRIMARY KEY,
+                        file_id TEXT NOT NULL,
+                        file_name TEXT NOT NULL,
+                        file_size INTEGER NOT NULL,
+                        file_hash TEXT NOT NULL,
+                        target_path TEXT NOT NULL,
+                        owner_id TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        progress REAL NOT NULL DEFAULT 0,
+                        start_time TEXT NOT NULL,
+                        end_time TEXT,
+                        FOREIGN KEY (file_id) REFERENCES files (hash)
+                    )
+                ''')
+                
+                await db.commit()
+                self.logger.info("Database tables created successfully")
+        except Exception as e:
+            self.logger.error(f"Error creating database tables: {e}")
+            raise
 
     def get_connection(self):
         """Get a database connection."""
@@ -504,8 +521,9 @@ class DatabaseManager:
                 await db.execute('''
                     INSERT OR REPLACE INTO files (
                         hash, name, size, created_at, modified_at,
-                        owner_id, permissions, metadata
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        owner_id, owner_name, upload_time, is_available,
+                        ttl, seen_by, chunks, metadata
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     metadata.file_id,
                     metadata.name,
@@ -513,7 +531,12 @@ class DatabaseManager:
                     metadata.upload_time.isoformat(),  # Use upload_time for created_at
                     metadata.upload_time.isoformat(),  # Use upload_time for modified_at
                     metadata.owner_id,
-                    json.dumps({"read": ["*"], "write": [metadata.owner_id]}),  # Default permissions
+                    metadata.owner_name,
+                    metadata.upload_time.isoformat(),
+                    metadata.is_available,
+                    metadata.ttl,
+                    json.dumps(list(metadata.seen_by)),
+                    json.dumps([{"index": c.index, "hash": c.hash, "size": c.size} for c in metadata.chunks]),
                     json.dumps(metadata_dict)
                 ))
                 await db.commit()
@@ -533,14 +556,39 @@ class DatabaseManager:
                     row = await cursor.fetchone()
                     if row:
                         # Convert row to dict
-                        file_data = dict(row)
+                        file_data = dict(zip([col[0] for col in cursor.description], row))
                         
                         # Parse metadata
                         metadata = json.loads(file_data['metadata'])
                         
                         # Create FileMetadata object
-                        from src.file_management.file_metadata import FileMetadata
-                        return FileMetadata.from_dict(metadata)
+                        from src.file_management.file_metadata import FileMetadata, FileChunk
+                        
+                        # Parse chunks
+                        chunks_data = json.loads(file_data['chunks'])
+                        chunks = [
+                            FileChunk(
+                                index=chunk['index'],
+                                hash=chunk['hash'],
+                                size=chunk['size']
+                            )
+                            for chunk in chunks_data
+                        ]
+                        
+                        # Create metadata object
+                        return FileMetadata(
+                            file_id=file_data['hash'],
+                            name=file_data['name'],
+                            size=file_data['size'],
+                            hash=file_data['hash'],
+                            owner_id=file_data['owner_id'],
+                            owner_name=file_data['owner_name'],
+                            upload_time=datetime.fromisoformat(file_data['upload_time']),
+                            is_available=bool(file_data['is_available']),
+                            ttl=int(file_data['ttl']),
+                            seen_by=set(json.loads(file_data['seen_by'])),
+                            chunks=chunks
+                        )
                     return None
         except Exception as e:
             self.logger.error(f"Error retrieving file metadata: {e}")

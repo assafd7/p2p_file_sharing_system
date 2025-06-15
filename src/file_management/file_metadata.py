@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Set
 import logging
 import asyncio
 from pathlib import Path
+import aiosqlite
 
 @dataclass
 class FileChunk:
@@ -66,11 +67,12 @@ class FileMetadata:
 class FileMetadataManager:
     """Manages file metadata in the P2P network."""
     
-    def __init__(self):
+    def __init__(self, db_path: str):
         self.logger = logging.getLogger(__name__)
         self._metadata: Dict[str, FileMetadata] = {}  # file_id -> metadata
         self._lock = asyncio.Lock()  # Lock for thread-safe operations
         self._seen_metadata: Set[str] = set()  # Set of seen metadata IDs
+        self.db_path = db_path
     
     async def add_metadata(self, metadata: FileMetadata) -> bool:
         """Add new file metadata."""
@@ -93,8 +95,55 @@ class FileMetadataManager:
     
     async def get_all_metadata(self) -> List[FileMetadata]:
         """Get all file metadata."""
-        async with self._lock:
-            return list(self._metadata.values())
+        try:
+            self.logger.debug("Getting all metadata from database")
+            async with aiosqlite.connect(self.db_path) as db:
+                async with db.execute("SELECT * FROM files") as cursor:
+                    rows = await cursor.fetchall()
+                    self.logger.debug(f"Retrieved {len(rows)} files from database")
+                    
+                    metadata_list = []
+                    for row in rows:
+                        try:
+                            # Convert row to dict
+                            file_data = dict(zip([col[0] for col in cursor.description], row))
+                            
+                            # Parse chunks
+                            chunks_data = json.loads(file_data['chunks'])
+                            chunks = [
+                                FileChunk(
+                                    index=chunk['index'],
+                                    hash=chunk['hash'],
+                                    size=chunk['size']
+                                )
+                                for chunk in chunks_data
+                            ]
+                            
+                            # Create metadata object
+                            metadata = FileMetadata(
+                                file_id=file_data['hash'],
+                                name=file_data['name'],
+                                size=file_data['size'],
+                                hash=file_data['hash'],
+                                owner_id=file_data['owner_id'],
+                                owner_name=file_data['owner_name'],
+                                upload_time=datetime.fromisoformat(file_data['upload_time']),
+                                is_available=bool(file_data['is_available']),
+                                ttl=int(file_data['ttl']),
+                                seen_by=set(json.loads(file_data['seen_by'])),
+                                chunks=chunks
+                            )
+                            metadata_list.append(metadata)
+                            self.logger.debug(f"Added metadata for file: {metadata.name}")
+                        except Exception as e:
+                            self.logger.error(f"Error parsing metadata for row: {e}")
+                            continue
+                    
+                    self.logger.debug(f"Successfully parsed {len(metadata_list)} metadata entries")
+                    return metadata_list
+        except Exception as e:
+            self.logger.error(f"Error getting all metadata: {e}")
+            return []
     
     async def remove_metadata(self, file_id: str) -> bool:
         """Remove file metadata."""
