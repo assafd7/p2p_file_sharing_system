@@ -18,6 +18,11 @@ class DatabaseManager:
     def _migrate_database(self):
         """Handle database migrations."""
         with self.get_connection() as conn:
+            # Clean up any existing temporary tables from failed migrations
+            conn.execute("DROP TABLE IF EXISTS files_new")
+            conn.execute("DROP TABLE IF EXISTS peers_new")
+            conn.commit()
+
             # Check if username column exists in peers table
             cursor = conn.execute("PRAGMA table_info(peers)")
             columns = {row[1] for row in cursor.fetchall()}
@@ -66,43 +71,84 @@ class DatabaseManager:
             
             if 'file_id' not in columns:
                 self.logger.info("Updating files table schema")
-                # Create new files table with correct schema
-                conn.execute("""
-                    CREATE TABLE files_new (
-                        file_id TEXT PRIMARY KEY,
-                        name TEXT NOT NULL,
-                        size INTEGER NOT NULL,
-                        hash TEXT NOT NULL,
-                        owner_id TEXT NOT NULL,
-                        owner_name TEXT NOT NULL,
-                        upload_time TIMESTAMP NOT NULL,
-                        is_available BOOLEAN NOT NULL DEFAULT 1,
-                        ttl INTEGER NOT NULL DEFAULT 10,
-                        seen_by TEXT,
-                        chunks TEXT,
-                        metadata TEXT
-                    )
-                """)
-                
-                # Copy data from old table if it exists
-                if 'hash' in columns:
+                try:
+                    # Create new files table with correct schema
                     conn.execute("""
-                        INSERT INTO files_new (
-                            file_id, name, size, hash, owner_id, owner_name,
-                            upload_time, is_available, ttl, seen_by, chunks, metadata
+                        CREATE TABLE files_new (
+                            file_id TEXT PRIMARY KEY,
+                            name TEXT NOT NULL,
+                            size INTEGER NOT NULL,
+                            hash TEXT NOT NULL,
+                            owner_id TEXT NOT NULL,
+                            owner_name TEXT NOT NULL,
+                            upload_time TIMESTAMP NOT NULL,
+                            is_available BOOLEAN NOT NULL DEFAULT 1,
+                            ttl INTEGER NOT NULL DEFAULT 10,
+                            seen_by TEXT,
+                            chunks TEXT,
+                            metadata TEXT
                         )
-                        SELECT 
-                            hash, name, size, hash, owner_id, 
-                            COALESCE(owner_name, 'Unknown'), 
-                            COALESCE(upload_time, CURRENT_TIMESTAMP),
-                            1, 10, '[]', '[]', '{}'
-                        FROM files
                     """)
-                
-                # Drop old table and rename new one
-                conn.execute("DROP TABLE IF EXISTS files")
-                conn.execute("ALTER TABLE files_new RENAME TO files")
-                conn.commit()
+                    
+                    # Copy data from old table if it exists
+                    if 'hash' in columns:
+                        try:
+                            conn.execute("""
+                                INSERT INTO files_new (
+                                    file_id, name, size, hash, owner_id, owner_name,
+                                    upload_time, is_available, ttl, seen_by, chunks, metadata
+                                )
+                                SELECT 
+                                    hash, name, size, hash, owner_id, 
+                                    COALESCE(owner_name, 'Unknown'), 
+                                    COALESCE(upload_time, CURRENT_TIMESTAMP),
+                                    1, 10, '[]', '[]', '{}'
+                                FROM files
+                            """)
+                        except sqlite3.OperationalError as e:
+                            self.logger.error(f"Error copying data to new files table: {e}")
+                            # If there's an error, drop the new table and recreate it
+                            conn.execute("DROP TABLE IF EXISTS files_new")
+                            conn.execute("""
+                                CREATE TABLE files_new (
+                                    file_id TEXT PRIMARY KEY,
+                                    name TEXT NOT NULL,
+                                    size INTEGER NOT NULL,
+                                    hash TEXT NOT NULL,
+                                    owner_id TEXT NOT NULL,
+                                    owner_name TEXT NOT NULL,
+                                    upload_time TIMESTAMP NOT NULL,
+                                    is_available BOOLEAN NOT NULL DEFAULT 1,
+                                    ttl INTEGER NOT NULL DEFAULT 10,
+                                    seen_by TEXT,
+                                    chunks TEXT,
+                                    metadata TEXT
+                                )
+                            """)
+                            # Try copying data again with a simpler query
+                            conn.execute("""
+                                INSERT INTO files_new (
+                                    file_id, name, size, hash, owner_id, owner_name,
+                                    upload_time, is_available, ttl, seen_by, chunks, metadata
+                                )
+                                SELECT 
+                                    hash, name, size, hash, owner_id, 
+                                    'Unknown', 
+                                    CURRENT_TIMESTAMP,
+                                    1, 10, '[]', '[]', '{}'
+                                FROM files
+                            """)
+                    
+                    # Drop old table and rename new one
+                    conn.execute("DROP TABLE IF EXISTS files")
+                    conn.execute("ALTER TABLE files_new RENAME TO files")
+                    conn.commit()
+                except sqlite3.OperationalError as e:
+                    self.logger.error(f"Error during files table migration: {e}")
+                    # Clean up on error
+                    conn.execute("DROP TABLE IF EXISTS files_new")
+                    conn.commit()
+                    raise
 
     def get_connection(self):
         """Get a database connection."""
