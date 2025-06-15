@@ -618,6 +618,7 @@ class DatabaseManager:
     async def get_all_files(self):
         """Fetch all files from the files table and return as a list of FileMetadata objects."""
         try:
+            self.logger.debug("get_all_files: Starting fetch from database")
             from src.file_management.file_metadata import FileMetadata, FileChunk
             import json
             from datetime import datetime
@@ -625,12 +626,14 @@ class DatabaseManager:
             async with aiosqlite.connect(self.db_path) as db:
                 async with db.execute("SELECT * FROM files") as cursor:
                     columns = [col[0] for col in cursor.description]
-                    async for row in cursor:
+                    rows = await cursor.fetchall()
+                    self.logger.debug(f"get_all_files: Fetched {len(rows)} rows from database")
+                    if rows:
+                        self.logger.debug(f"get_all_files: First row: {rows[0]}")
+                    for row in rows:
                         file_data = dict(zip(columns, row))
-                        # Parse JSON fields
                         seen_by = json.loads(file_data['seen_by']) if file_data.get('seen_by') else []
                         chunks_data = json.loads(file_data['chunks']) if file_data.get('chunks') else []
-                        # Create FileMetadata object
                         files.append(FileMetadata(
                             file_id=file_data['file_id'],
                             name=file_data['name'],
@@ -644,7 +647,8 @@ class DatabaseManager:
                             seen_by=set(seen_by),
                             chunks=[FileChunk(**chunk) for chunk in chunks_data],
                         ))
+            self.logger.debug(f"get_all_files: Returning {len(files)} FileMetadata objects")
             return files
         except Exception as e:
-            self.logger.error(f"Error fetching all files: {e}")
+            self.logger.error(f"Error fetching all files: {e}", exc_info=True)
             return [] 

@@ -160,12 +160,12 @@ class FileManager:
     
     async def get_shared_files(self) -> List[FileMetadata]:
         """Get all shared files"""
-        self.logger.debug("Getting shared files")
+        self.logger.debug("get_shared_files: Fetching shared files from database")
         try:
             files = await self.db_manager.get_all_files()
-            self.logger.debug(f"Retrieved {len(files)} files from database")
+            self.logger.debug(f"get_shared_files: Retrieved {len(files)} files from database")
             for file in files:
-                self.logger.debug(f"File details: {file}")
+                self.logger.debug(f"get_shared_files: File details: {file}")
             return files
         except Exception as e:
             self.logger.error(f"Error getting shared files: {str(e)}", exc_info=True)
