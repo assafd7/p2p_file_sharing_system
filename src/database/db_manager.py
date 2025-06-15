@@ -5,6 +5,7 @@ from datetime import datetime
 import logging
 import aiosqlite
 from pathlib import Path
+from dataclasses import asdict
 
 class DatabaseManager:
     def __init__(self, db_path: str = "p2p_network.db"):
@@ -78,13 +79,18 @@ class DatabaseManager:
             # Create files table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS files (
-                    hash TEXT PRIMARY KEY,
+                    file_id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     size INTEGER NOT NULL,
+                    hash TEXT NOT NULL,
                     owner_id TEXT NOT NULL,
-                    shared BOOLEAN DEFAULT 0,
-                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (owner_id) REFERENCES peers(id)
+                    owner_name TEXT NOT NULL,
+                    upload_time TIMESTAMP NOT NULL,
+                    is_available BOOLEAN NOT NULL DEFAULT 1,
+                    ttl INTEGER NOT NULL DEFAULT 10,
+                    seen_by TEXT,
+                    chunks TEXT,
+                    metadata TEXT
                 )
             """)
             
@@ -139,13 +145,17 @@ class DatabaseManager:
             # Create files table
             await db.execute('''
                 CREATE TABLE IF NOT EXISTS files (
-                    hash TEXT PRIMARY KEY,
+                    file_id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     size INTEGER NOT NULL,
-                    created_at TIMESTAMP NOT NULL,
-                    modified_at TIMESTAMP NOT NULL,
+                    hash TEXT NOT NULL,
                     owner_id TEXT NOT NULL,
-                    permissions TEXT NOT NULL,
+                    owner_name TEXT NOT NULL,
+                    upload_time TIMESTAMP NOT NULL,
+                    is_available BOOLEAN NOT NULL DEFAULT 1,
+                    ttl INTEGER NOT NULL DEFAULT 10,
+                    seen_by TEXT,
+                    chunks TEXT,
                     metadata TEXT
                 )
             ''')
@@ -503,17 +513,21 @@ class DatabaseManager:
                 metadata_dict = metadata.to_dict()
                 await db.execute('''
                     INSERT OR REPLACE INTO files (
-                        hash, name, size, created_at, modified_at,
-                        owner_id, permissions, metadata
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        file_id, name, size, hash, owner_id, owner_name,
+                        upload_time, is_available, ttl, seen_by, chunks, metadata
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     metadata.file_id,
                     metadata.name,
                     metadata.size,
-                    metadata.upload_time.isoformat(),  # Use upload_time for created_at
-                    metadata.upload_time.isoformat(),  # Use upload_time for modified_at
+                    metadata.hash,
                     metadata.owner_id,
-                    json.dumps({"read": ["*"], "write": [metadata.owner_id]}),  # Default permissions
+                    metadata.owner_name,
+                    metadata.upload_time.isoformat(),
+                    metadata.is_available,
+                    metadata.ttl,
+                    json.dumps(list(metadata.seen_by)),
+                    json.dumps([asdict(chunk) for chunk in metadata.chunks]),
                     json.dumps(metadata_dict)
                 ))
                 await db.commit()
@@ -527,21 +541,69 @@ class DatabaseManager:
         try:
             async with aiosqlite.connect(self.db_path) as db:
                 async with db.execute(
-                    "SELECT * FROM files WHERE hash = ?",
+                    "SELECT * FROM files WHERE file_id = ?",
                     (file_id,)
                 ) as cursor:
                     row = await cursor.fetchone()
                     if row:
                         # Convert row to dict
-                        file_data = dict(row)
+                        file_data = dict(zip([col[0] for col in cursor.description], row))
                         
-                        # Parse metadata
-                        metadata = json.loads(file_data['metadata'])
+                        # Parse JSON fields
+                        seen_by = json.loads(file_data['seen_by']) if file_data['seen_by'] else []
+                        chunks_data = json.loads(file_data['chunks']) if file_data['chunks'] else []
                         
                         # Create FileMetadata object
-                        from src.file_management.file_metadata import FileMetadata
-                        return FileMetadata.from_dict(metadata)
+                        from src.file_management.file_metadata import FileMetadata, FileChunk
+                        return FileMetadata(
+                            file_id=file_data['file_id'],
+                            name=file_data['name'],
+                            size=file_data['size'],
+                            hash=file_data['hash'],
+                            owner_id=file_data['owner_id'],
+                            owner_name=file_data['owner_name'],
+                            upload_time=datetime.fromisoformat(file_data['upload_time']),
+                            is_available=bool(file_data['is_available']),
+                            ttl=int(file_data['ttl']),
+                            seen_by=set(seen_by),
+                            chunks=[FileChunk(**chunk) for chunk in chunks_data]
+                        )
                     return None
         except Exception as e:
             self.logger.error(f"Error retrieving file metadata: {e}")
-            return None 
+            return None
+
+    async def get_all_files(self) -> List['FileMetadata']:
+        """Get all shared files from the database."""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                async with db.execute("SELECT * FROM files") as cursor:
+                    rows = await cursor.fetchall()
+                    files = []
+                    for row in rows:
+                        # Convert row to dict
+                        file_data = dict(zip([col[0] for col in cursor.description], row))
+                        
+                        # Parse JSON fields
+                        seen_by = json.loads(file_data['seen_by']) if file_data['seen_by'] else []
+                        chunks_data = json.loads(file_data['chunks']) if file_data['chunks'] else []
+                        
+                        # Create FileMetadata object
+                        from src.file_management.file_metadata import FileMetadata, FileChunk
+                        files.append(FileMetadata(
+                            file_id=file_data['file_id'],
+                            name=file_data['name'],
+                            size=file_data['size'],
+                            hash=file_data['hash'],
+                            owner_id=file_data['owner_id'],
+                            owner_name=file_data['owner_name'],
+                            upload_time=datetime.fromisoformat(file_data['upload_time']),
+                            is_available=bool(file_data['is_available']),
+                            ttl=int(file_data['ttl']),
+                            seen_by=set(seen_by),
+                            chunks=[FileChunk(**chunk) for chunk in chunks_data]
+                        ))
+                    return files
+        except Exception as e:
+            self.logger.error(f"Error retrieving all files: {e}")
+            return [] 

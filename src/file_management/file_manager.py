@@ -162,8 +162,8 @@ class FileManager:
         """Get all shared files"""
         self.logger.debug("Getting shared files")
         try:
-            files = await self.metadata_manager.get_all_metadata()
-            self.logger.debug(f"Retrieved {len(files)} files from metadata manager")
+            files = await self.db_manager.get_all_files()
+            self.logger.debug(f"Retrieved {len(files)} files from database")
             for file in files:
                 self.logger.debug(f"File details: {file}")
             return files
