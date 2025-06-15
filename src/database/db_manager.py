@@ -13,7 +13,6 @@ class DatabaseManager:
         self.db_path = db_path
         self.logger = logging.getLogger(__name__)
         self._connection = None
-        self._create_tables()
         self._migrate_database()
 
     def _migrate_database(self):
@@ -61,52 +60,49 @@ class DatabaseManager:
                 conn.execute("ALTER TABLE peers_new RENAME TO peers")
                 conn.commit()
 
-    def _create_tables(self):
-        """Create necessary database tables if they don't exist."""
-        with self.get_connection() as conn:
-            # Create peers table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS peers (
-                    id TEXT PRIMARY KEY,
-                    address TEXT NOT NULL,
-                    port INTEGER NOT NULL,
-                    username TEXT,
-                    is_connected BOOLEAN DEFAULT 1,
-                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+            # Check if files table exists and has the correct schema
+            cursor = conn.execute("PRAGMA table_info(files)")
+            columns = {row[1] for row in cursor.fetchall()}
             
-            # Create files table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS files (
-                    file_id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    size INTEGER NOT NULL,
-                    hash TEXT NOT NULL,
-                    owner_id TEXT NOT NULL,
-                    owner_name TEXT NOT NULL,
-                    upload_time TIMESTAMP NOT NULL,
-                    is_available BOOLEAN NOT NULL DEFAULT 1,
-                    ttl INTEGER NOT NULL DEFAULT 10,
-                    seen_by TEXT,
-                    chunks TEXT,
-                    metadata TEXT
-                )
-            """)
-            
-            # Create file_peers table for tracking which peers have which files
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS file_peers (
-                    file_hash TEXT,
-                    peer_id TEXT,
-                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (file_hash, peer_id),
-                    FOREIGN KEY (file_hash) REFERENCES files(hash),
-                    FOREIGN KEY (peer_id) REFERENCES peers(id)
-                )
-            """)
-            
-            conn.commit()
+            if 'file_id' not in columns:
+                self.logger.info("Updating files table schema")
+                # Create new files table with correct schema
+                conn.execute("""
+                    CREATE TABLE files_new (
+                        file_id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        size INTEGER NOT NULL,
+                        hash TEXT NOT NULL,
+                        owner_id TEXT NOT NULL,
+                        owner_name TEXT NOT NULL,
+                        upload_time TIMESTAMP NOT NULL,
+                        is_available BOOLEAN NOT NULL DEFAULT 1,
+                        ttl INTEGER NOT NULL DEFAULT 10,
+                        seen_by TEXT,
+                        chunks TEXT,
+                        metadata TEXT
+                    )
+                """)
+                
+                # Copy data from old table if it exists
+                if 'hash' in columns:
+                    conn.execute("""
+                        INSERT INTO files_new (
+                            file_id, name, size, hash, owner_id, owner_name,
+                            upload_time, is_available, ttl, seen_by, chunks, metadata
+                        )
+                        SELECT 
+                            hash, name, size, hash, owner_id, 
+                            COALESCE(owner_name, 'Unknown'), 
+                            COALESCE(upload_time, CURRENT_TIMESTAMP),
+                            1, 10, '[]', '[]', '{}'
+                        FROM files
+                    """)
+                
+                # Drop old table and rename new one
+                conn.execute("DROP TABLE IF EXISTS files")
+                conn.execute("ALTER TABLE files_new RENAME TO files")
+                conn.commit()
 
     def get_connection(self):
         """Get a database connection."""
