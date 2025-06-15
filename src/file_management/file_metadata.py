@@ -9,6 +9,13 @@ import asyncio
 from pathlib import Path
 
 @dataclass
+class FileChunk:
+    """Represents a chunk of a file."""
+    index: int
+    hash: str
+    size: int
+
+@dataclass
 class FileMetadata:
     """Metadata for a file in the P2P network."""
     file_id: str  # Unique identifier (hash of file contents)
