@@ -37,6 +37,8 @@ class FileMetadata:
             self.chunks = []
         if self.file_id is None:
             self.file_id = self.hash
+        if isinstance(self.upload_time, str):
+            self.upload_time = datetime.fromisoformat(self.upload_time)
     
     def to_dict(self) -> Dict:
         """Convert metadata to dictionary for serialization."""
@@ -48,10 +50,22 @@ class FileMetadata:
     @classmethod
     def from_dict(cls, data: Dict) -> 'FileMetadata':
         """Create metadata from dictionary."""
+        # Handle upload_time conversion
         if 'upload_time' in data:
-            data['upload_time'] = datetime.fromisoformat(data['upload_time'])
+            if isinstance(data['upload_time'], str):
+                data['upload_time'] = datetime.fromisoformat(data['upload_time'])
+        
+        # Handle seen_by conversion
         if 'seen_by' in data:
-            data['seen_by'] = set(data['seen_by'])
+            if isinstance(data['seen_by'], list):
+                data['seen_by'] = set(data['seen_by'])
+        
+        # Handle chunks conversion
+        if 'chunks' in data:
+            if isinstance(data['chunks'], list):
+                data['chunks'] = [FileChunk(**chunk) if isinstance(chunk, dict) else chunk 
+                                for chunk in data['chunks']]
+        
         return cls(**data)
     
     def to_json(self) -> str:

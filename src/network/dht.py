@@ -809,14 +809,18 @@ class DHT:
         """Handle incoming file metadata"""
         self.logger.debug(f"Handling file metadata from peer {peer.address}:{peer.port}")
         try:
-            metadata = message.payload
-            self.logger.debug(f"Received metadata for file: {metadata.get('name')}")
-            self.logger.debug(f"Full metadata: {metadata}")
+            metadata_dict = message.payload
+            self.logger.debug(f"Received metadata for file: {metadata_dict.get('name')}")
+            self.logger.debug(f"Full metadata: {metadata_dict}")
+            
+            # Convert dictionary to FileMetadata object
+            metadata = FileMetadata.from_dict(metadata_dict)
+            self.logger.debug(f"Converted metadata to FileMetadata object: {metadata}")
             
             # Check if we've seen this metadata before
-            metadata_id = f"{metadata['hash']}_{metadata['owner_id']}"
+            metadata_id = f"{metadata.hash}_{metadata.owner_id}"
             if metadata_id in self._seen_metadata:
-                self.logger.debug(f"Already seen metadata for file {metadata['name']}, skipping")
+                self.logger.debug(f"Already seen metadata for file {metadata.name}, skipping")
                 return
             
             self.logger.debug(f"Marking metadata as seen: {metadata_id}")
@@ -834,10 +838,10 @@ class DHT:
                 self.logger.debug("UI notification complete")
             
             # Forward metadata to other peers if TTL > 0
-            if metadata.get('ttl', 0) > 0:
-                self.logger.debug(f"Forwarding metadata (TTL: {metadata['ttl']})")
-                metadata['ttl'] -= 1
-                await self._broadcast_metadata(metadata, exclude_peer=peer)
+            if metadata.ttl > 0:
+                self.logger.debug(f"Forwarding metadata (TTL: {metadata.ttl})")
+                metadata.ttl -= 1
+                await self._broadcast_metadata(metadata.to_dict(), exclude_peer=peer)
                 self.logger.debug("Metadata forwarding complete")
             
         except Exception as e:
