@@ -635,18 +635,23 @@ class MainWindow(QMainWindow):
             loop = asyncio.get_event_loop()
             
             # Create a future for the async operation
-            async def get_files():
+            future = asyncio.run_coroutine_threadsafe(
+                self.file_manager.get_shared_files(),
+                loop
+            )
+            
+            def handle_files(fut):
                 try:
-                    files = await self.file_manager.get_shared_files()
+                    files = fut.result()
                     self.logger.debug(f"Retrieved {len(files)} files from file manager")
-                    # Schedule UI update in main thread
+                    # Update UI in main thread
                     QTimer.singleShot(0, lambda: self._update_file_list_ui(files))
                 except Exception as e:
                     self.logger.error(f"Error retrieving files: {e}")
                     QTimer.singleShot(0, lambda: self._update_file_list_ui([]))
             
-            # Schedule the async operation
-            loop.create_task(get_files())
+            # Add callback to handle the result
+            future.add_done_callback(handle_files)
             
         except Exception as e:
             self.logger.error(f"Error in async file list update: {e}")
