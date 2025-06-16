@@ -628,13 +628,19 @@ class DatabaseManager:
     async def get_all_files(self):
         """Fetch all files from the files table and return as a list of FileMetadata objects."""
         try:
+            self.logger.debug("Starting get_all_files")
             from src.file_management.file_metadata import FileMetadata, FileChunk
             import json
             from datetime import datetime
             files = []
+            
+            self.logger.debug("Connecting to database")
             async with aiosqlite.connect(self.db_path) as db:
+                self.logger.debug("Executing SELECT query on files table")
                 async with db.execute("SELECT * FROM files") as cursor:
                     columns = [col[0] for col in cursor.description]
+                    self.logger.debug(f"Found columns: {columns}")
+                    
                     async for row in cursor:
                         try:
                             file_data = dict(zip(columns, row))
@@ -644,6 +650,7 @@ class DatabaseManager:
                             seen_by = json.loads(file_data['seen_by']) if file_data.get('seen_by') else []
                             chunks_data = json.loads(file_data['chunks']) if file_data.get('chunks') else []
                             metadata = json.loads(file_data['metadata']) if file_data.get('metadata') else {}
+                            self.logger.debug(f"Parsed JSON fields - seen_by: {seen_by}, chunks: {chunks_data}")
                             
                             # Create FileMetadata object
                             file_metadata = FileMetadata(
@@ -659,6 +666,8 @@ class DatabaseManager:
                                 seen_by=set(seen_by),
                                 chunks=[FileChunk(**chunk) for chunk in chunks_data]
                             )
+                            self.logger.debug(f"Created FileMetadata object: {file_metadata.__dict__}")
+                            
                             files.append(file_metadata)
                             self.logger.debug(f"Added file to list: {file_metadata.name}")
                         except Exception as e:

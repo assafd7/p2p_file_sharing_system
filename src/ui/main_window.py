@@ -614,7 +614,9 @@ class MainWindow(QMainWindow):
         """Update the file list with current shared files."""
         try:
             self.logger.debug("Starting file list update")
+            self.logger.debug(f"Current file list item count: {self.file_list.topLevelItemCount()}")
             self.file_list.clear()
+            self.logger.debug("Cleared file list")
             
             # Create a timer to handle async operations
             timer = QTimer()
@@ -622,39 +624,78 @@ class MainWindow(QMainWindow):
             
             async def update_files():
                 try:
+                    self.logger.debug("Starting async file list update")
                     # Get shared files from file manager
+                    self.logger.debug("Calling file_manager.get_shared_files()")
                     files = await self.file_manager.get_shared_files()
                     self.logger.debug(f"Retrieved {len(files)} files from file manager")
+                    self.logger.debug(f"Files data: {[f.name for f in files]}")
                     
-                    for metadata in files:
+                    # Update UI in the main thread
+                    def update_ui():
                         try:
-                            self.logger.debug(f"Processing file metadata: {metadata.name}")
-                            item = QTreeWidgetItem()
-                            item.setText(0, metadata.name)
-                            item.setText(1, self.format_size(metadata.size))
-                            item.setText(2, metadata.owner_name)
-                            item.setText(3, "Available" if metadata.is_available else "Unavailable")
+                            self.logger.debug("Starting UI update in main thread")
+                            for metadata in files:
+                                try:
+                                    self.logger.debug(f"Processing file metadata: {metadata.name}")
+                                    self.logger.debug(f"Metadata details: {metadata.__dict__}")
+                                    
+                                    item = QTreeWidgetItem()
+                                    self.logger.debug("Created new QTreeWidgetItem")
+                                    
+                                    # Set item text
+                                    item.setText(0, metadata.name)
+                                    item.setText(1, self.format_size(metadata.size))
+                                    item.setText(2, metadata.owner_name)
+                                    item.setText(3, "Available" if metadata.is_available else "Unavailable")
+                                    self.logger.debug(f"Set item text for {metadata.name}")
+                                    
+                                    # Store metadata in item
+                                    item.setData(0, Qt.ItemDataRole.UserRole, metadata)
+                                    self.logger.debug(f"Stored metadata in item for {metadata.name}")
+                                    
+                                    # Add to list and verify
+                                    self.file_list.addTopLevelItem(item)
+                                    self.logger.debug(f"Added item to file list: {metadata.name}")
+                                    self.logger.debug(f"Current item count: {self.file_list.topLevelItemCount()}")
+                                    
+                                    # Verify item was added
+                                    found = False
+                                    for i in range(self.file_list.topLevelItemCount()):
+                                        if self.file_list.topLevelItem(i).text(0) == metadata.name:
+                                            found = True
+                                            self.logger.debug(f"Verified item {metadata.name} is in list at index {i}")
+                                            break
+                                    if not found:
+                                        self.logger.error(f"Failed to verify item {metadata.name} in list")
+                                    
+                                except Exception as e:
+                                    self.logger.error(f"Error processing file metadata: {e}", exc_info=True)
+                                    continue
                             
-                            # Store metadata in item
-                            item.setData(0, Qt.ItemDataRole.UserRole, metadata)
+                            # Resize columns to fit content
+                            self.logger.debug("Resizing columns to fit content")
+                            for i in range(self.file_list.columnCount()):
+                                self.file_list.resizeColumnToContents(i)
+                                self.logger.debug(f"Resized column {i}")
                             
-                            self.file_list.addTopLevelItem(item)
-                            self.logger.debug(f"Added file to list: {metadata.name}")
+                            self.logger.debug(f"Final file list item count: {self.file_list.topLevelItemCount()}")
+                            self.logger.debug("UI update completed")
                         except Exception as e:
-                            self.logger.error(f"Error processing file metadata: {e}", exc_info=True)
-                            continue
+                            self.logger.error(f"Error in UI update: {e}", exc_info=True)
                     
-                    # Resize columns to fit content
-                    for i in range(self.file_list.columnCount()):
-                        self.file_list.resizeColumnToContents(i)
-                        
-                    self.logger.debug("File list update completed")
+                    # Schedule UI update in main thread
+                    self.logger.debug("Scheduling UI update in main thread")
+                    QTimer.singleShot(0, update_ui)
+                    
                 except Exception as e:
-                    self.logger.error(f"Error updating file list: {e}", exc_info=True)
+                    self.logger.error(f"Error in async update_files: {e}", exc_info=True)
             
             # Connect timer to async update
+            self.logger.debug("Setting up timer for async update")
             timer.timeout.connect(lambda: asyncio.create_task(update_files()))
             timer.start(0)  # Start immediately
+            self.logger.debug("Started timer for async update")
             
         except Exception as e:
             self.logger.error(f"Error in update_file_list: {e}", exc_info=True)
