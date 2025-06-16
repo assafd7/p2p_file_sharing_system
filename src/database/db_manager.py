@@ -627,27 +627,27 @@ class DatabaseManager:
 
     async def get_all_files(self) -> List[Dict]:
         """Get all files from the database"""
-        logger.debug("Starting get_all_files")
+        self.logger.debug("Starting get_all_files")
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                logger.debug("Connected to database")
+                self.logger.debug("Connected to database")
                 # Get all files
                 query = "SELECT * FROM files"
-                logger.debug(f"Executing query: {query}")
+                self.logger.debug(f"Executing query: {query}")
                 async with db.execute(query) as cursor:
                     rows = await cursor.fetchall()
-                    logger.debug(f"Retrieved {len(rows)} rows from database")
+                    self.logger.debug(f"Retrieved {len(rows)} rows from database")
                     
                     # Get column names
                     columns = [description[0] for description in cursor.description]
-                    logger.debug(f"Column names: {columns}")
+                    self.logger.debug(f"Column names: {columns}")
                     
                     # Convert rows to dictionaries
                     files = []
                     for row in rows:
                         try:
                             file_dict = dict(zip(columns, row))
-                            logger.debug(f"Processing row: {file_dict}")
+                            self.logger.debug(f"Processing row: {file_dict}")
                             
                             # Parse JSON fields
                             if 'metadata' in file_dict and file_dict['metadata']:
@@ -658,14 +658,14 @@ class DatabaseManager:
                                 file_dict['seen_by'] = json.loads(file_dict['seen_by'])
                             
                             files.append(file_dict)
-                            logger.debug(f"Added file to list: {file_dict['name']}")
+                            self.logger.debug(f"Added file to list: {file_dict['name']}")
                         except Exception as e:
-                            logger.error(f"Error processing row: {str(e)}")
+                            self.logger.error(f"Error processing row: {str(e)}")
                             continue
                     
-                    logger.debug(f"Returning {len(files)} files")
+                    self.logger.debug(f"Returning {len(files)} files")
                     return files
                     
         except Exception as e:
-            logger.error(f"Error in get_all_files: {str(e)}")
+            self.logger.error(f"Error in get_all_files: {str(e)}")
             return [] 

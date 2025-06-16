@@ -630,15 +630,27 @@ class MainWindow(QMainWindow):
         """Asynchronous part of file list update"""
         try:
             self.logger.debug("Starting async file list update")
-            # Get files from file manager
-            files = self.file_manager.get_shared_files()
-            self.logger.debug(f"Retrieved {len(files)} files from file manager")
             
-            # Schedule UI update in main thread
-            QTimer.singleShot(0, lambda: self._update_file_list_ui(files))
+            # Get the event loop
+            loop = asyncio.get_event_loop()
+            
+            # Create a future for the async operation
+            async def get_files():
+                try:
+                    files = await self.file_manager.get_shared_files()
+                    self.logger.debug(f"Retrieved {len(files)} files from file manager")
+                    # Schedule UI update in main thread
+                    QTimer.singleShot(0, lambda: self._update_file_list_ui(files))
+                except Exception as e:
+                    self.logger.error(f"Error retrieving files: {e}")
+                    QTimer.singleShot(0, lambda: self._update_file_list_ui([]))
+            
+            # Schedule the async operation
+            loop.create_task(get_files())
             
         except Exception as e:
-            self.logger.error(f"Error in async file list update: {str(e)}")
+            self.logger.error(f"Error in async file list update: {e}")
+            QTimer.singleShot(0, lambda: self._update_file_list_ui([]))
             
     def _update_file_list_ui(self, files):
         """Update UI with file list in main thread"""
@@ -653,15 +665,13 @@ class MainWindow(QMainWindow):
                     
                     # Set text for each column
                     item.setText(0, file.name)
-                    item.setText(1, str(file.size))
+                    item.setText(1, self.format_size(file.size))
                     item.setText(2, file.owner_name)
-                    item.setText(3, file.upload_time.strftime("%Y-%m-%d %H:%M:%S"))
-                    item.setText(4, "Available" if file.is_available else "Unavailable")
-                    item.setText(5, str(file.ttl))
+                    item.setText(3, "Available" if file.is_available else "Unavailable")
                     self.logger.debug(f"Set text for columns for file: {file.name}")
                     
                     # Store metadata
-                    item.setData(0, Qt.UserRole, file)
+                    item.setData(0, Qt.ItemDataRole.UserRole, file)
                     self.logger.debug(f"Stored metadata for file: {file.name}")
                     
                     # Add to list
@@ -680,7 +690,7 @@ class MainWindow(QMainWindow):
                     continue
                     
             # Resize columns
-            for i in range(6):
+            for i in range(4):  # We have 4 columns: Name, Size, Owner, Status
                 self.file_list.resizeColumnToContents(i)
             self.logger.debug("Resized columns")
             
