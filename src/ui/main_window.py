@@ -615,87 +615,81 @@ class MainWindow(QMainWindow):
         self.logger.debug("Starting file list update")
         self.logger.debug(f"Current file list item count: {self.file_list.topLevelItemCount()}")
         
-        # Clear the list first
+        # Clear the list
         self.file_list.clear()
         self.logger.debug("Cleared file list")
         
-        # Create a timer to handle async operations
+        # Create a timer for async operation
         timer = QTimer()
         timer.setSingleShot(True)
-        
-        async def update_files():
-            try:
-                self.logger.debug("Starting async file list update")
-                # Get files from file manager
-                self.logger.debug("Calling file_manager.get_shared_files()")
-                files = await self.file_manager.get_shared_files()
-                self.logger.debug(f"Retrieved {len(files)} files from file manager")
-                
-                # Schedule UI update in main thread
-                def update_ui():
-                    try:
-                        self.logger.debug("Starting UI update in main thread")
-                        for file in files:
-                            try:
-                                self.logger.debug(f"Processing file metadata: {file.name}")
-                                self.logger.debug(f"File metadata: {file}")
-                                
-                                # Create item
-                                item = QTreeWidgetItem()
-                                self.logger.debug("Created QTreeWidgetItem")
-                                
-                                # Set item text
-                                item.setText(0, file.name)
-                                item.setText(1, str(file.size))
-                                item.setText(2, file.owner_id)
-                                item.setText(3, file.owner_name)
-                                item.setText(4, file.owner_ip)
-                                item.setText(5, str(file.upload_time))
-                                self.logger.debug("Set item text for all columns")
-                                
-                                # Store metadata
-                                item.setData(0, Qt.UserRole, file)
-                                self.logger.debug("Stored metadata in item")
-                                
-                                # Add to list
-                                self.file_list.addTopLevelItem(item)
-                                self.logger.debug(f"Added item to list. Current count: {self.file_list.topLevelItemCount()}")
-                                
-                                # Verify item was added
-                                found = False
-                                for i in range(self.file_list.topLevelItemCount()):
-                                    if self.file_list.topLevelItem(i).text(0) == file.name:
-                                        found = True
-                                        self.logger.debug(f"Verified item added at index {i}")
-                                        break
-                                if not found:
-                                    self.logger.error(f"Failed to add item for file: {file.name}")
-                                
-                            except Exception as e:
-                                self.logger.error(f"Error processing file {file.name}: {str(e)}")
-                                continue
-                        
-                        # Resize columns to fit content
-                        for i in range(6):
-                            self.file_list.resizeColumnToContents(i)
-                        self.logger.debug("Resized columns to fit content")
-                        
-                        self.logger.debug(f"Final file list item count: {self.file_list.topLevelItemCount()}")
-                        
-                    except Exception as e:
-                        self.logger.error(f"Error updating UI: {str(e)}")
-                
-                # Schedule UI update in main thread
-                QTimer.singleShot(0, update_ui)
-                self.logger.debug("Scheduled UI update in main thread")
-                
-            except Exception as e:
-                self.logger.error(f"Error in async update: {str(e)}")
-        
-        # Start the async operation
-        timer.timeout.connect(lambda: asyncio.create_task(update_files()))
-        timer.start(0)
+        timer.timeout.connect(lambda: self._update_file_list_async())
+        timer.start(0)  # Start immediately
         self.logger.debug("Started timer for async update")
+        
+    def _update_file_list_async(self):
+        """Asynchronous part of file list update"""
+        try:
+            self.logger.debug("Starting async file list update")
+            # Get files from file manager
+            files = self.file_manager.get_shared_files()
+            self.logger.debug(f"Retrieved {len(files)} files from file manager")
+            
+            # Schedule UI update in main thread
+            QTimer.singleShot(0, lambda: self._update_file_list_ui(files))
+            
+        except Exception as e:
+            self.logger.error(f"Error in async file list update: {str(e)}")
+            
+    def _update_file_list_ui(self, files):
+        """Update UI with file list in main thread"""
+        try:
+            self.logger.debug("Starting UI update in main thread")
+            for file in files:
+                try:
+                    self.logger.debug(f"Processing file: {file.name}")
+                    # Create item
+                    item = QTreeWidgetItem()
+                    self.logger.debug("Created QTreeWidgetItem")
+                    
+                    # Set text for each column
+                    item.setText(0, file.name)
+                    item.setText(1, str(file.size))
+                    item.setText(2, file.owner_name)
+                    item.setText(3, file.upload_time.strftime("%Y-%m-%d %H:%M:%S"))
+                    item.setText(4, "Available" if file.is_available else "Unavailable")
+                    item.setText(5, str(file.ttl))
+                    self.logger.debug(f"Set text for columns for file: {file.name}")
+                    
+                    # Store metadata
+                    item.setData(0, Qt.UserRole, file)
+                    self.logger.debug(f"Stored metadata for file: {file.name}")
+                    
+                    # Add to list
+                    self.file_list.addTopLevelItem(item)
+                    self.logger.debug(f"Added item to list: {file.name}")
+                    
+                    # Verify item was added
+                    index = self.file_list.indexOfTopLevelItem(item)
+                    if index >= 0:
+                        self.logger.debug(f"Verified item added at index {index}")
+                    else:
+                        self.logger.error(f"Failed to add item to list: {file.name}")
+                        
+                except Exception as e:
+                    self.logger.error(f"Error processing file {file.name}: {str(e)}")
+                    continue
+                    
+            # Resize columns
+            for i in range(6):
+                self.file_list.resizeColumnToContents(i)
+            self.logger.debug("Resized columns")
+            
+            # Log final item count
+            final_count = self.file_list.topLevelItemCount()
+            self.logger.debug(f"Final file list item count: {final_count}")
+            
+        except Exception as e:
+            self.logger.error(f"Error in UI update: {str(e)}")
 
     def format_size(self, size: int) -> str:
         """Format file size in human-readable format."""
