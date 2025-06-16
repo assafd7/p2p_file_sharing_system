@@ -611,55 +611,40 @@ class MainWindow(QMainWindow):
             self.logger.error(f"Error updating UI: {e}")
 
     def update_file_list(self):
-        """Update the file list with current shared files"""
-        self.logger.debug("Starting file list update")
-        self.file_list.clear()
-        
-        # Create a timer to handle async operations
-        timer = QTimer()
-        timer.setSingleShot(True)
-        
-        async def update_files():
-            try:
-                self.logger.debug("Fetching shared files from file manager")
-                files = await self.file_manager.get_shared_files()
-                self.logger.debug(f"Retrieved {len(files)} files from file manager")
-                
-                for metadata in files:
+        """Update the file list with current shared files."""
+        try:
+            self.logger.debug("Starting file list update")
+            self.file_list.clear()
+            
+            # Get shared files from file manager
+            files = self.file_manager.get_shared_files()
+            self.logger.debug(f"Retrieved {len(files)} files from file manager")
+            
+            for metadata in files:
+                try:
                     self.logger.debug(f"Processing file metadata: {metadata.name}")
-                    self.logger.debug(f"File metadata details: {metadata}")
-                    
-                    # Format file size
-                    size_str = self.format_size(metadata.size)
-                    
-                    # Create item with file info
-                    item = QTreeWidgetItem([
-                        metadata.name,
-                        size_str,
-                        metadata.owner_name,
-                        "Available" if metadata.is_available else "Unavailable"
-                    ])
+                    item = QTreeWidgetItem()
+                    item.setText(0, metadata.name)
+                    item.setText(1, self.format_size(metadata.size))
+                    item.setText(2, metadata.owner_name)
+                    item.setText(3, "Available" if metadata.is_available else "Unavailable")
                     
                     # Store metadata in item
                     item.setData(0, Qt.ItemDataRole.UserRole, metadata)
-                    self.logger.debug(f"Added file to list: {metadata.name}")
                     
-                    # Add to list
                     self.file_list.addTopLevelItem(item)
+                    self.logger.debug(f"Added file to list: {metadata.name}")
+                except Exception as e:
+                    self.logger.error(f"Error processing file metadata: {e}", exc_info=True)
+                    continue
+            
+            # Resize columns to fit content
+            for i in range(self.file_list.columnCount()):
+                self.file_list.resizeColumnToContents(i)
                 
-                self.logger.debug("Finished processing all files")
-                # Resize columns to fit content
-                for i in range(self.file_list.columnCount()):
-                    self.file_list.resizeColumnToContents(i)
-                self.logger.debug("Resized columns to fit content")
-                
-            except Exception as e:
-                self.logger.error(f"Error updating file list: {str(e)}", exc_info=True)
-        
-        # Connect timer to async update
-        timer.timeout.connect(lambda: asyncio.create_task(update_files()))
-        timer.start(0)  # Start immediately
-        self.logger.debug("Started file list update timer")
+            self.logger.debug("File list update completed")
+        except Exception as e:
+            self.logger.error(f"Error updating file list: {e}", exc_info=True)
 
     def format_size(self, size: int) -> str:
         """Format file size in human-readable format."""

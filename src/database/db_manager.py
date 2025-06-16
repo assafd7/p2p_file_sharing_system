@@ -636,28 +636,37 @@ class DatabaseManager:
                 async with db.execute("SELECT * FROM files") as cursor:
                     columns = [col[0] for col in cursor.description]
                     async for row in cursor:
-                        file_data = dict(zip(columns, row))
-                        # Parse JSON fields
-                        seen_by = json.loads(file_data['seen_by']) if file_data.get('seen_by') else []
-                        chunks_data = json.loads(file_data['chunks']) if file_data.get('chunks') else []
-                        metadata = json.loads(file_data['metadata']) if file_data.get('metadata') else {}
-                        
-                        # Create FileMetadata object
-                        files.append(FileMetadata(
-                            file_id=file_data['file_id'],
-                            name=file_data['name'],
-                            size=file_data['size'],
-                            hash=file_data['hash'],
-                            owner_id=file_data['owner_id'],
-                            owner_name=file_data.get('owner_name', 'Unknown'),
-                            upload_time=datetime.fromisoformat(file_data['upload_time']) if file_data.get('upload_time') else datetime.now(),
-                            is_available=bool(file_data.get('is_available', 1)),
-                            ttl=int(file_data.get('ttl', 10)),
-                            seen_by=set(seen_by),
-                            chunks=[FileChunk(**chunk) for chunk in chunks_data]
-                        ))
+                        try:
+                            file_data = dict(zip(columns, row))
+                            self.logger.debug(f"Processing file data: {file_data}")
+                            
+                            # Parse JSON fields
+                            seen_by = json.loads(file_data['seen_by']) if file_data.get('seen_by') else []
+                            chunks_data = json.loads(file_data['chunks']) if file_data.get('chunks') else []
+                            metadata = json.loads(file_data['metadata']) if file_data.get('metadata') else {}
+                            
+                            # Create FileMetadata object
+                            file_metadata = FileMetadata(
+                                file_id=file_data['file_id'],
+                                name=file_data['name'],
+                                size=file_data['size'],
+                                hash=file_data['hash'],
+                                owner_id=file_data['owner_id'],
+                                owner_name=file_data.get('owner_name', 'Unknown'),
+                                upload_time=datetime.fromisoformat(file_data['upload_time']) if file_data.get('upload_time') else datetime.now(),
+                                is_available=bool(file_data.get('is_available', 1)),
+                                ttl=int(file_data.get('ttl', 10)),
+                                seen_by=set(seen_by),
+                                chunks=[FileChunk(**chunk) for chunk in chunks_data]
+                            )
+                            files.append(file_metadata)
+                            self.logger.debug(f"Added file to list: {file_metadata.name}")
+                        except Exception as e:
+                            self.logger.error(f"Error processing file data: {e}", exc_info=True)
+                            continue
+                            
             self.logger.debug(f"Retrieved {len(files)} files from database")
             return files
         except Exception as e:
-            self.logger.error(f"Error fetching all files: {e}", exc_info=True)
+            self.logger.error(f"Error retrieving files from database: {e}", exc_info=True)
             return [] 

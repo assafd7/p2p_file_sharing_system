@@ -161,9 +161,33 @@ class FileManager:
         try:
             files = await self.db_manager.get_all_files()
             self.logger.debug(f"Retrieved {len(files)} files from database")
+            
+            # Convert database files to FileMetadata objects
+            metadata_list = []
             for file in files:
-                self.logger.debug(f"File details: {file}")
-            return files
+                try:
+                    self.logger.debug(f"Processing file from database: {file}")
+                    metadata = FileMetadata(
+                        file_id=file.file_id,
+                        name=file.name,
+                        size=file.size,
+                        hash=file.hash,
+                        owner_id=file.owner_id,
+                        owner_name=file.owner_name,
+                        upload_time=file.upload_time,
+                        is_available=file.is_available,
+                        ttl=file.ttl,
+                        seen_by=file.seen_by,
+                        chunks=file.chunks
+                    )
+                    metadata_list.append(metadata)
+                    self.logger.debug(f"Added file to list: {metadata.name}")
+                except Exception as e:
+                    self.logger.error(f"Error processing file {file.name}: {e}", exc_info=True)
+                    continue
+            
+            self.logger.debug(f"Returning {len(metadata_list)} files")
+            return metadata_list
         except Exception as e:
             self.logger.error(f"Error getting shared files: {str(e)}", exc_info=True)
             return []
