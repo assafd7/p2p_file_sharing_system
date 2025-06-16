@@ -626,44 +626,46 @@ class DatabaseManager:
             return None
 
     async def get_all_files(self) -> List[Dict]:
-        """Get all files from the database."""
+        """Get all files from the database"""
+        logger.debug("Starting get_all_files")
         try:
-            self.logger.debug("Starting get_all_files")
             async with aiosqlite.connect(self.db_path) as db:
-                self.logger.debug("Connected to database")
-                async with db.execute("SELECT * FROM files") as cursor:
-                    self.logger.debug("Executed SELECT query")
+                logger.debug("Connected to database")
+                # Get all files
+                query = "SELECT * FROM files"
+                logger.debug(f"Executing query: {query}")
+                async with db.execute(query) as cursor:
                     rows = await cursor.fetchall()
-                    self.logger.debug(f"Retrieved {len(rows)} rows from database")
+                    logger.debug(f"Retrieved {len(rows)} rows from database")
                     
                     # Get column names
                     columns = [description[0] for description in cursor.description]
-                    self.logger.debug(f"Column names: {columns}")
+                    logger.debug(f"Column names: {columns}")
                     
                     # Convert rows to dictionaries
                     files = []
                     for row in rows:
                         try:
-                            file_data = dict(zip(columns, row))
-                            self.logger.debug(f"Processing row: {file_data}")
+                            file_dict = dict(zip(columns, row))
+                            logger.debug(f"Processing row: {file_dict}")
                             
                             # Parse JSON fields
-                            if 'metadata' in file_data and file_data['metadata']:
-                                file_data['metadata'] = json.loads(file_data['metadata'])
-                            if 'chunks' in file_data and file_data['chunks']:
-                                file_data['chunks'] = json.loads(file_data['chunks'])
-                            if 'seen_by' in file_data and file_data['seen_by']:
-                                file_data['seen_by'] = json.loads(file_data['seen_by'])
+                            if 'metadata' in file_dict and file_dict['metadata']:
+                                file_dict['metadata'] = json.loads(file_dict['metadata'])
+                            if 'chunks' in file_dict and file_dict['chunks']:
+                                file_dict['chunks'] = json.loads(file_dict['chunks'])
+                            if 'seen_by' in file_dict and file_dict['seen_by']:
+                                file_dict['seen_by'] = json.loads(file_dict['seen_by'])
                             
-                            self.logger.debug(f"Processed file data: {file_data}")
-                            files.append(file_data)
+                            files.append(file_dict)
+                            logger.debug(f"Added file to list: {file_dict['name']}")
                         except Exception as e:
-                            self.logger.error(f"Error processing row: {e}", exc_info=True)
+                            logger.error(f"Error processing row: {str(e)}")
                             continue
                     
-                    self.logger.debug(f"Returning {len(files)} files")
+                    logger.debug(f"Returning {len(files)} files")
                     return files
                     
         except Exception as e:
-            self.logger.error(f"Error in get_all_files: {e}", exc_info=True)
+            logger.error(f"Error in get_all_files: {str(e)}")
             return [] 

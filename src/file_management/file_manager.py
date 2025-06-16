@@ -156,19 +156,19 @@ class FileManager:
         return self.storage_dir / file_id
     
     async def get_shared_files(self) -> List[FileMetadata]:
-        """Get all shared files."""
+        """Get all shared files from the database"""
+        logger.debug("Starting get_shared_files")
         try:
-            self.logger.debug("Starting get_shared_files")
             # Get files from database
-            self.logger.debug("Calling db_manager.get_all_files()")
+            logger.debug("Calling db_manager.get_all_files()")
             files = await self.db_manager.get_all_files()
-            self.logger.debug(f"Retrieved {len(files)} files from database")
+            logger.debug(f"Retrieved {len(files)} files from database")
             
             # Convert database files to metadata objects
             metadata_list = []
             for file_data in files:
                 try:
-                    self.logger.debug(f"Processing file data: {file_data}")
+                    logger.debug(f"Processing file data: {file_data}")
                     metadata = FileMetadata(
                         file_id=file_data['file_id'],
                         name=file_data['name'],
@@ -179,20 +179,20 @@ class FileManager:
                         upload_time=datetime.fromisoformat(file_data['upload_time']),
                         is_available=file_data['is_available'],
                         ttl=file_data['ttl'],
-                        seen_by=set(file_data['seen_by']),
-                        chunks=[FileChunk(**chunk) for chunk in file_data['chunks']]
+                        seen_by=set(json.loads(file_data['seen_by'])),
+                        chunks=[FileChunk(**chunk) for chunk in json.loads(file_data['chunks'])]
                     )
-                    self.logger.debug(f"Created metadata object for {metadata.name}")
+                    logger.debug(f"Created metadata object: {metadata}")
                     metadata_list.append(metadata)
                 except Exception as e:
-                    self.logger.error(f"Error processing file data: {e}", exc_info=True)
+                    logger.error(f"Error processing file data: {str(e)}")
                     continue
             
-            self.logger.debug(f"Returning {len(metadata_list)} metadata objects")
+            logger.debug(f"Returning {len(metadata_list)} metadata objects")
             return metadata_list
             
         except Exception as e:
-            self.logger.error(f"Error in get_shared_files: {e}", exc_info=True)
+            logger.error(f"Error in get_shared_files: {str(e)}")
             return []
     
     async def get_file_metadata(self, file_id: str) -> Optional[FileMetadata]:
