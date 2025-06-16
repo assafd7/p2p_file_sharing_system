@@ -13,16 +13,8 @@ import uuid
 
 from src.database.db_manager import DatabaseManager
 from src.file_management.file_transfer import FileTransfer
-from src.file_management.file_metadata import FileMetadata, FileMetadataManager
+from src.file_management.file_metadata import FileMetadata, FileMetadataManager, FileChunk
 from src.network.dht import DHT
-
-@dataclass
-class FileChunk:
-    """Represents a chunk of a file."""
-    index: int
-    hash: str
-    size: int
-    data: Optional[bytes] = None
 
 @dataclass
 class FileMetadata:
@@ -160,12 +152,12 @@ class FileManager:
     
     async def get_shared_files(self) -> List[FileMetadata]:
         """Get all shared files"""
-        self.logger.debug("get_shared_files: Fetching shared files from database")
+        self.logger.debug("Getting shared files")
         try:
             files = await self.db_manager.get_all_files()
-            self.logger.debug(f"get_shared_files: Retrieved {len(files)} files from database")
+            self.logger.debug(f"Retrieved {len(files)} files from database")
             for file in files:
-                self.logger.debug(f"get_shared_files: File details: {file}")
+                self.logger.debug(f"File details: {file}")
             return files
         except Exception as e:
             self.logger.error(f"Error getting shared files: {str(e)}", exc_info=True)
@@ -276,13 +268,6 @@ class FileManager:
 
     async def create_file_metadata(self, file_path: str, owner_id: str) -> FileMetadata:
         """Create metadata for a file."""
-        path = None
-        stats = None
-        created_at = None
-        modified_at = None
-        chunks = []
-        final_hash = None
-        
         try:
             self.logger.debug(f"[DEBUG] Starting metadata creation for file: {file_path}")
             path = Path(file_path)
@@ -296,20 +281,12 @@ class FileManager:
             if stats.st_size > 1024 * 1024 * 1024:  # 1GB limit
                 self.logger.error("[ERROR] File too large")
                 raise FileManagerError("File is too large (max 1GB)")
-            self.logger.debug(f"[DEBUG] File stats: size={stats.st_size}, created={stats.st_ctime}, modified={stats.st_mtime}")
+            self.logger.debug(f"[DEBUG] File stats: size={stats.st_size}")
 
-            # 2. Timestamp Stage
-            self.logger.debug("[DEBUG] Processing timestamps")
-            created_at = datetime.fromtimestamp(stats.st_ctime)
-            modified_at = datetime.fromtimestamp(stats.st_mtime)
-            if created_at > datetime.now() or modified_at > datetime.now():
-                self.logger.error("[ERROR] Invalid timestamps")
-                raise FileManagerError("Invalid file timestamps")
-            self.logger.debug(f"[DEBUG] Timestamps processed: created={created_at}, modified={modified_at}")
-
-            # 3. Chunk Creation Stage
+            # 2. Chunk Creation Stage
             chunk_index = 0
             file_hash = hashlib.sha256()
+            chunks = []
             self.logger.debug("[DEBUG] Starting chunk creation")
             with open(path, 'rb') as f:
                 while True:
@@ -334,7 +311,7 @@ class FileManager:
                 self.logger.error("[ERROR] No chunks created")
                 raise FileManagerError("No chunks were created")
 
-            # 4. Hash Calculation Stage
+            # 3. Hash Calculation Stage
             self.logger.debug("[DEBUG] Calculating final hash")
             final_hash = file_hash.hexdigest()
             if not final_hash:
@@ -342,17 +319,20 @@ class FileManager:
                 raise FileManagerError("Failed to calculate file hash")
             self.logger.debug(f"[DEBUG] Calculated file hash: {final_hash}")
 
-            # 5. Metadata Object Creation Stage
+            # 4. Metadata Object Creation Stage
             self.logger.debug("[DEBUG] Creating metadata object")
             metadata = FileMetadata(
+                file_id=final_hash,
                 name=path.name,
                 size=stats.st_size,
-                created_at=created_at,
-                modified_at=modified_at,
                 hash=final_hash,
-                chunks=chunks,
                 owner_id=owner_id,
-                permissions={owner_id: ['read', 'write', 'share']}
+                owner_name="Unknown",  # Will be updated by caller
+                upload_time=datetime.now(),
+                is_available=True,
+                ttl=10,
+                seen_by=set(),
+                chunks=chunks
             )
             # Verify metadata object
             if not metadata.name or not metadata.hash or not metadata.chunks:
@@ -371,23 +351,7 @@ class FileManager:
             metadata_path = self._get_file_path(metadata.file_id) / "metadata.json"
             metadata_path.parent.mkdir(parents=True, exist_ok=True)
 
-            metadata_dict = {
-                "name": metadata.name,
-                "size": metadata.size,
-                "created_at": metadata.created_at.isoformat(),
-                "modified_at": metadata.modified_at.isoformat(),
-                "hash": metadata.hash,
-                "chunks": [
-                    {
-                        "index": chunk.index,
-                        "hash": chunk.hash,
-                        "size": chunk.size
-                    }
-                    for chunk in metadata.chunks
-                ],
-                "owner_id": metadata.owner_id,
-                "permissions": metadata.permissions
-            }
+            metadata_dict = metadata.to_dict()
 
             with open(metadata_path, 'w') as f:
                 json.dump(metadata_dict, f, indent=2)
@@ -406,23 +370,7 @@ class FileManager:
             with open(metadata_path, 'r') as f:
                 data = json.load(f)
 
-            return FileMetadata(
-                name=data["name"],
-                size=data["size"],
-                created_at=datetime.fromisoformat(data["created_at"]),
-                modified_at=datetime.fromisoformat(data["modified_at"]),
-                hash=data["hash"],
-                chunks=[
-                    FileChunk(
-                        index=chunk["index"],
-                        hash=chunk["hash"],
-                        size=chunk["size"]
-                    )
-                    for chunk in data["chunks"]
-                ],
-                owner_id=data["owner_id"],
-                permissions=data["permissions"]
-            )
+            return FileMetadata.from_dict(data)
         except Exception as e:
             self.logger.error(f"Error loading file metadata: {e}")
             return None

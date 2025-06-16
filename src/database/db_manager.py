@@ -170,86 +170,91 @@ class DatabaseManager:
 
     async def initialize(self):
         """Initialize the database with required tables."""
-        async with aiosqlite.connect(self.db_path) as db:
-            # Create peers table
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS peers (
-                    id TEXT PRIMARY KEY,
-                    address TEXT NOT NULL,
-                    port INTEGER NOT NULL,
-                    last_seen TIMESTAMP NOT NULL,
-                    is_connected BOOLEAN NOT NULL,
-                    username TEXT,
-                    metadata TEXT
-                )
-            ''')
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                # Create peers table
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS peers (
+                        id TEXT PRIMARY KEY,
+                        address TEXT NOT NULL,
+                        port INTEGER NOT NULL,
+                        last_seen TIMESTAMP NOT NULL,
+                        is_connected BOOLEAN NOT NULL,
+                        username TEXT,
+                        metadata TEXT
+                    )
+                ''')
 
-            # Create files table
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS files (
-                    file_id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    size INTEGER NOT NULL,
-                    hash TEXT NOT NULL,
-                    owner_id TEXT NOT NULL,
-                    owner_name TEXT NOT NULL,
-                    upload_time TIMESTAMP NOT NULL,
-                    is_available BOOLEAN NOT NULL DEFAULT 1,
-                    ttl INTEGER NOT NULL DEFAULT 10,
-                    seen_by TEXT,
-                    chunks TEXT,
-                    metadata TEXT
-                )
-            ''')
+                # Create files table
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS files (
+                        file_id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        size INTEGER NOT NULL,
+                        hash TEXT NOT NULL,
+                        owner_id TEXT NOT NULL,
+                        owner_name TEXT NOT NULL,
+                        upload_time TIMESTAMP NOT NULL,
+                        is_available BOOLEAN NOT NULL DEFAULT 1,
+                        ttl INTEGER NOT NULL DEFAULT 10,
+                        seen_by TEXT,
+                        chunks TEXT,
+                        metadata TEXT
+                    )
+                ''')
 
-            # Create chunks table
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS chunks (
-                    file_hash TEXT NOT NULL,
-                    chunk_index INTEGER NOT NULL,
-                    hash TEXT NOT NULL,
-                    size INTEGER NOT NULL,
-                    status TEXT NOT NULL,
-                    PRIMARY KEY (file_hash, chunk_index),
-                    FOREIGN KEY (file_hash) REFERENCES files(hash)
-                )
-            ''')
+                # Create chunks table
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS chunks (
+                        file_hash TEXT NOT NULL,
+                        chunk_index INTEGER NOT NULL,
+                        hash TEXT NOT NULL,
+                        size INTEGER NOT NULL,
+                        status TEXT NOT NULL,
+                        PRIMARY KEY (file_hash, chunk_index),
+                        FOREIGN KEY (file_hash) REFERENCES files(hash)
+                    )
+                ''')
 
-            # Create transfers table
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS transfers (
-                    id TEXT PRIMARY KEY,
-                    file_hash TEXT NOT NULL,
-                    source_id TEXT NOT NULL,
-                    target_id TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    progress REAL NOT NULL,
-                    started_at TIMESTAMP NOT NULL,
-                    completed_at TIMESTAMP,
-                    FOREIGN KEY (file_hash) REFERENCES files(hash)
-                )
-            ''')
+                # Create transfers table
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS transfers (
+                        id TEXT PRIMARY KEY,
+                        file_hash TEXT NOT NULL,
+                        source_id TEXT NOT NULL,
+                        target_id TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        progress REAL NOT NULL,
+                        started_at TIMESTAMP NOT NULL,
+                        completed_at TIMESTAMP,
+                        FOREIGN KEY (file_hash) REFERENCES files(hash)
+                    )
+                ''')
 
-            # Create users table
-            await db.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    id TEXT PRIMARY KEY,
-                    username TEXT UNIQUE NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    created_at TIMESTAMP NOT NULL,
-                    last_login TIMESTAMP,
-                    is_active BOOLEAN NOT NULL,
-                    metadata TEXT
-                )
-            ''')
+                # Create users table
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS users (
+                        id TEXT PRIMARY KEY,
+                        username TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL,
+                        created_at TIMESTAMP NOT NULL,
+                        last_login TIMESTAMP,
+                        is_active BOOLEAN NOT NULL,
+                        metadata TEXT
+                    )
+                ''')
 
-            # Create indexes
-            await db.execute('CREATE INDEX IF NOT EXISTS idx_files_owner ON files(owner_id)')
-            await db.execute('CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_hash)')
-            await db.execute('CREATE INDEX IF NOT EXISTS idx_transfers_file ON transfers(file_hash)')
-            await db.execute('CREATE INDEX IF NOT EXISTS idx_transfers_status ON transfers(status)')
+                # Create indexes
+                await db.execute('CREATE INDEX IF NOT EXISTS idx_files_owner ON files(owner_id)')
+                await db.execute('CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_hash)')
+                await db.execute('CREATE INDEX IF NOT EXISTS idx_transfers_file ON transfers(file_hash)')
+                await db.execute('CREATE INDEX IF NOT EXISTS idx_transfers_status ON transfers(status)')
 
-            await db.commit()
+                await db.commit()
+                self.logger.info("Database initialized successfully")
+        except Exception as e:
+            self.logger.error(f"Error initializing database: {e}")
+            raise
 
     async def add_peer(self, peer_id: str, address: str, port: int, username: str = None, metadata: Optional[Dict] = None):
         """Add or update a peer in the database."""
@@ -384,16 +389,21 @@ class DatabaseManager:
             now = datetime.now().isoformat()
             await db.execute('''
                 INSERT OR REPLACE INTO files
-                (hash, name, size, created_at, modified_at, owner_id, permissions, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (file_id, name, size, hash, owner_id, owner_name,
+                upload_time, is_available, ttl, seen_by, chunks, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                file_hash,
+                file_hash,  # Using hash as file_id
                 name,
                 size,
-                now,
-                now,
+                file_hash,
                 owner_id,
-                json.dumps(permissions),
+                "Unknown",  # Default owner name
+                now,
+                1,  # is_available
+                10,  # ttl
+                "[]",  # seen_by
+                "[]",  # chunks
                 json.dumps(metadata or {})
             ))
             await db.commit()
@@ -533,7 +543,7 @@ class DatabaseManager:
             async with db.execute('''
                 SELECT * FROM files
                 WHERE owner_id = ?
-                ORDER BY modified_at DESC
+                ORDER BY upload_time DESC
             ''', (user_id,)) as cursor:
                 rows = await cursor.fetchall()
                 return [dict(row) for row in rows]
@@ -618,7 +628,6 @@ class DatabaseManager:
     async def get_all_files(self):
         """Fetch all files from the files table and return as a list of FileMetadata objects."""
         try:
-            self.logger.debug("get_all_files: Starting fetch from database")
             from src.file_management.file_metadata import FileMetadata, FileChunk
             import json
             from datetime import datetime
@@ -626,14 +635,12 @@ class DatabaseManager:
             async with aiosqlite.connect(self.db_path) as db:
                 async with db.execute("SELECT * FROM files") as cursor:
                     columns = [col[0] for col in cursor.description]
-                    rows = await cursor.fetchall()
-                    self.logger.debug(f"get_all_files: Fetched {len(rows)} rows from database")
-                    if rows:
-                        self.logger.debug(f"get_all_files: First row: {rows[0]}")
-                    for row in rows:
+                    async for row in cursor:
                         file_data = dict(zip(columns, row))
+                        # Parse JSON fields
                         seen_by = json.loads(file_data['seen_by']) if file_data.get('seen_by') else []
                         chunks_data = json.loads(file_data['chunks']) if file_data.get('chunks') else []
+                        # Create FileMetadata object
                         files.append(FileMetadata(
                             file_id=file_data['file_id'],
                             name=file_data['name'],
@@ -647,8 +654,7 @@ class DatabaseManager:
                             seen_by=set(seen_by),
                             chunks=[FileChunk(**chunk) for chunk in chunks_data],
                         ))
-            self.logger.debug(f"get_all_files: Returning {len(files)} FileMetadata objects")
             return files
         except Exception as e:
-            self.logger.error(f"Error fetching all files: {e}", exc_info=True)
+            self.logger.error(f"Error fetching all files: {e}")
             return [] 

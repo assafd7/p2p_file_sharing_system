@@ -621,11 +621,14 @@ class MainWindow(QMainWindow):
         
         async def update_files():
             try:
-                self.logger.debug("update_files: Fetching shared files from file manager")
+                self.logger.debug("Fetching shared files from file manager")
                 files = await self.file_manager.get_shared_files()
-                self.logger.debug(f"update_files: Received {len(files)} files from file manager")
+                self.logger.debug(f"Retrieved {len(files)} files from file manager")
+                
                 for metadata in files:
-                    self.logger.debug(f"update_files: File name: {metadata.name}")
+                    self.logger.debug(f"Processing file metadata: {metadata.name}")
+                    self.logger.debug(f"File metadata details: {metadata}")
+                    
                     # Create item with file info
                     item = QTreeWidgetItem([
                         metadata.name,
@@ -633,16 +636,20 @@ class MainWindow(QMainWindow):
                         metadata.owner_name,
                         "Available" if metadata.is_available else "Unavailable"
                     ])
+                    
                     # Store metadata in item
                     item.setData(0, Qt.UserRole, metadata)
                     self.logger.debug(f"Added file to list: {metadata.name}")
+                    
                     # Add to list
                     self.file_list.addTopLevelItem(item)
+                
                 self.logger.debug("Finished processing all files")
                 # Resize columns to fit content
                 for i in range(self.file_list.columnCount()):
                     self.file_list.resizeColumnToContents(i)
                 self.logger.debug("Resized columns to fit content")
+                
             except Exception as e:
                 self.logger.error(f"Error updating file list: {str(e)}", exc_info=True)
         

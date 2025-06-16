@@ -175,7 +175,6 @@ class DHT:
             
     def _register_message_handlers(self):
         """Register message handlers for the DHT."""
-        # Register handlers for different message types
         self.message_handlers = {
             MessageType.PEER_LIST: self._handle_peer_list,
             MessageType.HEARTBEAT: self._handle_heartbeat,
@@ -186,7 +185,7 @@ class DHT:
             MessageType.FILE_METADATA_RESPONSE: self._handle_file_metadata_response
         }
         self.logger.debug("Registered message handlers")
-
+            
     async def _handle_peer_list(self, message: Message, peer: Peer):
         """Handle peer list message."""
         try:
@@ -683,7 +682,7 @@ class DHT:
             self.logger.error(f"Error handling peer list: {e}")
 
     async def _process_messages(self, peer: Peer):
-        """Process incoming messages from a peer."""
+        """Process messages from a peer."""
         try:
             while True:
                 # Read message length
@@ -693,7 +692,7 @@ class DHT:
                     break
                     
                 length = int.from_bytes(length_data, 'big')
-                self.logger.debug(f"Received message of length {length} from peer {peer.id}")
+                self.logger.debug(f"Received message length {length} from peer {peer.id}")
                 
                 # Read message data
                 data = await peer.reader.read(length)
