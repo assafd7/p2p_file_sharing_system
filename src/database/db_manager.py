@@ -640,6 +640,8 @@ class DatabaseManager:
                         # Parse JSON fields
                         seen_by = json.loads(file_data['seen_by']) if file_data.get('seen_by') else []
                         chunks_data = json.loads(file_data['chunks']) if file_data.get('chunks') else []
+                        metadata = json.loads(file_data['metadata']) if file_data.get('metadata') else {}
+                        
                         # Create FileMetadata object
                         files.append(FileMetadata(
                             file_id=file_data['file_id'],
@@ -648,13 +650,14 @@ class DatabaseManager:
                             hash=file_data['hash'],
                             owner_id=file_data['owner_id'],
                             owner_name=file_data.get('owner_name', 'Unknown'),
-                            upload_time=datetime.fromisoformat(file_data['upload_time']) if file_data.get('upload_time') else None,
+                            upload_time=datetime.fromisoformat(file_data['upload_time']) if file_data.get('upload_time') else datetime.now(),
                             is_available=bool(file_data.get('is_available', 1)),
-                            ttl=file_data.get('ttl', 10),
+                            ttl=int(file_data.get('ttl', 10)),
                             seen_by=set(seen_by),
-                            chunks=[FileChunk(**chunk) for chunk in chunks_data],
+                            chunks=[FileChunk(**chunk) for chunk in chunks_data]
                         ))
+            self.logger.debug(f"Retrieved {len(files)} files from database")
             return files
         except Exception as e:
-            self.logger.error(f"Error fetching all files: {e}")
+            self.logger.error(f"Error fetching all files: {e}", exc_info=True)
             return [] 

@@ -86,10 +86,15 @@ class FileManager:
             shutil.copy2(file_path, storage_path)
             self.logger.debug(f"File copied to: {storage_path}")
             
-            # Store metadata
-            self.logger.debug("Storing metadata...")
+            # Store metadata in database
+            self.logger.debug("Storing metadata in database...")
+            await self.db_manager.store_file_metadata(metadata)
+            self.logger.debug("Metadata stored in database successfully")
+            
+            # Store metadata in memory
+            self.logger.debug("Storing metadata in memory...")
             await self.metadata_manager.add_metadata(metadata)
-            self.logger.debug("Metadata stored successfully")
+            self.logger.debug("Metadata stored in memory successfully")
             
             # Broadcast metadata if DHT is available
             if self.dht:
@@ -101,7 +106,7 @@ class FileManager:
             return metadata
             
         except Exception as e:
-            self.logger.error(f"Error adding file: {e}")
+            self.logger.error(f"Error adding file: {e}", exc_info=True)
             raise
     
     async def delete_file(self, file_id: str, user_id: str) -> bool:

@@ -629,16 +629,19 @@ class MainWindow(QMainWindow):
                     self.logger.debug(f"Processing file metadata: {metadata.name}")
                     self.logger.debug(f"File metadata details: {metadata}")
                     
+                    # Format file size
+                    size_str = self.format_size(metadata.size)
+                    
                     # Create item with file info
                     item = QTreeWidgetItem([
                         metadata.name,
-                        str(metadata.size),
+                        size_str,
                         metadata.owner_name,
                         "Available" if metadata.is_available else "Unavailable"
                     ])
                     
                     # Store metadata in item
-                    item.setData(0, Qt.UserRole, metadata)
+                    item.setData(0, Qt.ItemDataRole.UserRole, metadata)
                     self.logger.debug(f"Added file to list: {metadata.name}")
                     
                     # Add to list
