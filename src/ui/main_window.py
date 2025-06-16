@@ -616,35 +616,48 @@ class MainWindow(QMainWindow):
             self.logger.debug("Starting file list update")
             self.file_list.clear()
             
-            # Get shared files from file manager
-            files = self.file_manager.get_shared_files()
-            self.logger.debug(f"Retrieved {len(files)} files from file manager")
+            # Create a timer to handle async operations
+            timer = QTimer()
+            timer.setSingleShot(True)
             
-            for metadata in files:
+            async def update_files():
                 try:
-                    self.logger.debug(f"Processing file metadata: {metadata.name}")
-                    item = QTreeWidgetItem()
-                    item.setText(0, metadata.name)
-                    item.setText(1, self.format_size(metadata.size))
-                    item.setText(2, metadata.owner_name)
-                    item.setText(3, "Available" if metadata.is_available else "Unavailable")
+                    # Get shared files from file manager
+                    files = await self.file_manager.get_shared_files()
+                    self.logger.debug(f"Retrieved {len(files)} files from file manager")
                     
-                    # Store metadata in item
-                    item.setData(0, Qt.ItemDataRole.UserRole, metadata)
+                    for metadata in files:
+                        try:
+                            self.logger.debug(f"Processing file metadata: {metadata.name}")
+                            item = QTreeWidgetItem()
+                            item.setText(0, metadata.name)
+                            item.setText(1, self.format_size(metadata.size))
+                            item.setText(2, metadata.owner_name)
+                            item.setText(3, "Available" if metadata.is_available else "Unavailable")
+                            
+                            # Store metadata in item
+                            item.setData(0, Qt.ItemDataRole.UserRole, metadata)
+                            
+                            self.file_list.addTopLevelItem(item)
+                            self.logger.debug(f"Added file to list: {metadata.name}")
+                        except Exception as e:
+                            self.logger.error(f"Error processing file metadata: {e}", exc_info=True)
+                            continue
                     
-                    self.file_list.addTopLevelItem(item)
-                    self.logger.debug(f"Added file to list: {metadata.name}")
+                    # Resize columns to fit content
+                    for i in range(self.file_list.columnCount()):
+                        self.file_list.resizeColumnToContents(i)
+                        
+                    self.logger.debug("File list update completed")
                 except Exception as e:
-                    self.logger.error(f"Error processing file metadata: {e}", exc_info=True)
-                    continue
+                    self.logger.error(f"Error updating file list: {e}", exc_info=True)
             
-            # Resize columns to fit content
-            for i in range(self.file_list.columnCount()):
-                self.file_list.resizeColumnToContents(i)
-                
-            self.logger.debug("File list update completed")
+            # Connect timer to async update
+            timer.timeout.connect(lambda: asyncio.create_task(update_files()))
+            timer.start(0)  # Start immediately
+            
         except Exception as e:
-            self.logger.error(f"Error updating file list: {e}", exc_info=True)
+            self.logger.error(f"Error in update_file_list: {e}", exc_info=True)
 
     def format_size(self, size: int) -> str:
         """Format file size in human-readable format."""
