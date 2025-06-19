@@ -5,6 +5,7 @@ import socket
 from pathlib import Path
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import QTimer
+import logging
 
 from src.ui.main_window import MainWindow
 from src.ui.auth_window import AuthWindow
@@ -18,6 +19,10 @@ from src.config import (
     TEMP_DIR, FILES_DIR, CACHE_DIR, DB_PATH,
     WINDOW_TITLE, WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT
 )
+
+# Add this before DatabaseManager is instantiated
+print(f"[DEBUG] Resolved DB_PATH: {DB_PATH} (absolute: {DB_PATH.resolve()})")
+logging.basicConfig(level=logging.DEBUG)
 
 class P2PFileSharingApp:
     def __init__(self):
@@ -87,8 +92,12 @@ class P2PFileSharingApp:
             self.logger.debug("Security manager initialized")
             
             # Initialize database manager
-            self.db_manager = DatabaseManager(DB_PATH)
-            self.logger.debug("Database manager initialized")
+            try:
+                self.db_manager = DatabaseManager(DB_PATH)
+                print(f"[DEBUG] DatabaseManager initialized with DB_PATH: {DB_PATH}")
+            except Exception as e:
+                print(f"[ERROR] Failed to initialize DatabaseManager: {e}", file=sys.stderr)
+                raise
             
             # Get local IP address
             local_ip = self.get_local_ip()
