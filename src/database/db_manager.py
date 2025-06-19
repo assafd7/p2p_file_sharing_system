@@ -18,32 +18,89 @@ class DatabaseManager:
     def _migrate_database(self):
         """Handle database migrations."""
         with self.get_connection() as conn:
+            # Always create tables if they do not exist first
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS peers (
+                    id TEXT PRIMARY KEY,
+                    address TEXT NOT NULL,
+                    port INTEGER NOT NULL,
+                    username TEXT,
+                    is_connected BOOLEAN DEFAULT 1,
+                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    metadata TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS files (
+                    file_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    size INTEGER NOT NULL,
+                    hash TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    owner_name TEXT NOT NULL,
+                    upload_time TIMESTAMP NOT NULL,
+                    is_available BOOLEAN NOT NULL DEFAULT 1,
+                    ttl INTEGER NOT NULL DEFAULT 10,
+                    seen_by TEXT,
+                    chunks TEXT,
+                    metadata TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS chunks (
+                    file_hash TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    hash TEXT NOT NULL,
+                    size INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    PRIMARY KEY (file_hash, chunk_index),
+                    FOREIGN KEY (file_hash) REFERENCES files(hash)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS transfers (
+                    id TEXT PRIMARY KEY,
+                    file_hash TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    progress REAL NOT NULL,
+                    started_at TIMESTAMP NOT NULL,
+                    completed_at TIMESTAMP,
+                    FOREIGN KEY (file_hash) REFERENCES files(hash)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id TEXT PRIMARY KEY,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL,
+                    last_login TIMESTAMP,
+                    is_active BOOLEAN NOT NULL,
+                    metadata TEXT
+                )
+            """)
+            conn.commit()
+
             # Clean up any existing temporary tables from failed migrations
             conn.execute("DROP TABLE IF EXISTS files_new")
             conn.execute("DROP TABLE IF EXISTS peers_new")
             conn.commit()
 
-            # Check if username column exists in peers table
+            # Now safe to run PRAGMA and ALTER TABLE on existing tables
             cursor = conn.execute("PRAGMA table_info(peers)")
             columns = {row[1] for row in cursor.fetchall()}
-            
-            # Add username column if it doesn't exist
             if 'username' not in columns:
                 self.logger.info("Adding username column to peers table")
                 conn.execute("ALTER TABLE peers ADD COLUMN username TEXT")
                 conn.commit()
-            
-            # Add is_connected column if it doesn't exist
             if 'is_connected' not in columns:
                 self.logger.info("Adding is_connected column to peers table")
                 conn.execute("ALTER TABLE peers ADD COLUMN is_connected BOOLEAN DEFAULT 1")
                 conn.commit()
-            
-            # Check if address column exists (replacing host)
             if 'address' not in columns and 'host' in columns:
                 self.logger.info("Renaming host column to address in peers table")
-                # SQLite doesn't support column renaming directly, so we need to:
-                # 1. Create a new table with the correct schema
                 conn.execute("""
                     CREATE TABLE peers_new (
                         id TEXT PRIMARY KEY,
@@ -54,25 +111,20 @@ class DatabaseManager:
                         last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
-                # 2. Copy data from old table to new table
                 conn.execute("""
                     INSERT INTO peers_new (id, address, port, username, is_connected, last_seen)
                     SELECT id, host, port, username, 1, last_seen FROM peers
                 """)
-                # 3. Drop old table
                 conn.execute("DROP TABLE peers")
-                # 4. Rename new table to original name
                 conn.execute("ALTER TABLE peers_new RENAME TO peers")
                 conn.commit()
 
-            # Check if files table exists and has the correct schema
+            # Repeat for files table
             cursor = conn.execute("PRAGMA table_info(files)")
             columns = {row[1] for row in cursor.fetchall()}
-            
             if 'file_id' not in columns:
                 self.logger.info("Updating files table schema")
                 try:
-                    # Create new files table with correct schema
                     conn.execute("""
                         CREATE TABLE files_new (
                             file_id TEXT PRIMARY KEY,
@@ -89,8 +141,6 @@ class DatabaseManager:
                             metadata TEXT
                         )
                     """)
-                    
-                    # Copy data from old table if it exists
                     if 'hash' in columns:
                         try:
                             conn.execute("""
@@ -107,7 +157,6 @@ class DatabaseManager:
                             """)
                         except sqlite3.OperationalError as e:
                             self.logger.error(f"Error copying data to new files table: {e}")
-                            # If there's an error, drop the new table and recreate it
                             conn.execute("DROP TABLE IF EXISTS files_new")
                             conn.execute("""
                                 CREATE TABLE files_new (
@@ -125,7 +174,6 @@ class DatabaseManager:
                                     metadata TEXT
                                 )
                             """)
-                            # Try copying data again with a simpler query
                             conn.execute("""
                                 INSERT INTO files_new (
                                     file_id, name, size, hash, owner_id, owner_name,
@@ -138,14 +186,11 @@ class DatabaseManager:
                                     1, 10, '[]', '[]', '{}'
                                 FROM files
                             """)
-                    
-                    # Drop old table and rename new one
                     conn.execute("DROP TABLE IF EXISTS files")
                     conn.execute("ALTER TABLE files_new RENAME TO files")
                     conn.commit()
                 except sqlite3.OperationalError as e:
                     self.logger.error(f"Error during files table migration: {e}")
-                    # Clean up on error
                     conn.execute("DROP TABLE IF EXISTS files_new")
                     conn.commit()
                     raise
