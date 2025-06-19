@@ -7,11 +7,12 @@ DEFAULT_PORT = 8000
 BOOTSTRAP_NODES = []
 
 # Directory settings
-BASE_DIR = Path(__file__).parent.parent.parent
-TEMP_DIR = BASE_DIR / "data" / "temp"
-FILES_DIR = BASE_DIR / "data" / "files"
-CACHE_DIR = BASE_DIR / "data" / "cache"
-DB_PATH = BASE_DIR / "data" / "p2p.db"
+PROJECT_ROOT = Path(os.path.dirname(os.path.abspath(__file__))).parent
+DATA_DIR = PROJECT_ROOT / "data"
+TEMP_DIR = DATA_DIR / "temp"
+FILES_DIR = DATA_DIR / "files"
+CACHE_DIR = DATA_DIR / "cache"
+DB_PATH = DATA_DIR / "p2p.db"
 
 # UI settings
 WINDOW_TITLE = "P2P File Sharing System"
