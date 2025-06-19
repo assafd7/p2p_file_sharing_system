@@ -162,6 +162,7 @@ class FileManager:
             # Get files from database
             self.logger.debug("Calling db_manager.get_all_files()")
             files = await self.db_manager.get_all_files()
+            self.logger.debug(f"Raw files list length: {len(files)}")
             self.logger.debug(f"Retrieved {len(files)} files from database")
             
             # Convert database files to metadata objects
@@ -169,6 +170,19 @@ class FileManager:
             for file_data in files:
                 try:
                     self.logger.debug(f"Processing file data: {file_data}")
+                    # Ensure correct types and defaults
+                    is_available = bool(file_data.get('is_available', True))
+                    ttl = int(file_data.get('ttl', 10))
+                    seen_by = file_data.get('seen_by')
+                    if seen_by is None:
+                        seen_by = []
+                    elif isinstance(seen_by, str):
+                        seen_by = json.loads(seen_by)
+                    chunks = file_data.get('chunks')
+                    if chunks is None:
+                        chunks = []
+                    elif isinstance(chunks, str):
+                        chunks = json.loads(chunks)
                     metadata = FileMetadata(
                         file_id=file_data['file_id'],
                         name=file_data['name'],
@@ -177,22 +191,22 @@ class FileManager:
                         owner_id=file_data['owner_id'],
                         owner_name=file_data['owner_name'],
                         upload_time=datetime.fromisoformat(file_data['upload_time']),
-                        is_available=file_data['is_available'],
-                        ttl=file_data['ttl'],
-                        seen_by=set(json.loads(file_data['seen_by'])),
-                        chunks=[FileChunk(**chunk) for chunk in json.loads(file_data['chunks'])]
+                        is_available=is_available,
+                        ttl=ttl,
+                        seen_by=set(seen_by),
+                        chunks=[FileChunk(**chunk) for chunk in chunks]
                     )
                     self.logger.debug(f"Created metadata object: {metadata}")
                     metadata_list.append(metadata)
                 except Exception as e:
-                    self.logger.error(f"Error processing file data: {str(e)}")
+                    self.logger.error(f"Error processing file data: {file_data}\nException: {str(e)}", exc_info=True)
                     continue
             
             self.logger.debug(f"Returning {len(metadata_list)} metadata objects")
             return metadata_list
             
         except Exception as e:
-            self.logger.error(f"Error in get_shared_files: {str(e)}")
+            self.logger.error(f"Error in get_shared_files: {str(e)}", exc_info=True)
             return []
     
     async def get_file_metadata(self, file_id: str) -> Optional[FileMetadata]:
