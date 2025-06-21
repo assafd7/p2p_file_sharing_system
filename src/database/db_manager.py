@@ -605,8 +605,9 @@ class DatabaseManager:
     async def store_file_metadata(self, metadata: 'FileMetadata') -> None:
         """Store file metadata in the database."""
         try:
+            self.logger.debug(f"[store_file_metadata] DB path: {self.db_path} (absolute: {Path(self.db_path).resolve()})")
+            self.logger.debug(f"[store_file_metadata] About to insert metadata for file: {metadata.name} (ID: {metadata.file_id})")
             async with aiosqlite.connect(self.db_path) as db:
-                # Convert metadata to dict and store in database
                 metadata_dict = metadata.to_dict()
                 await db.execute('''
                     INSERT OR REPLACE INTO files (
@@ -628,9 +629,10 @@ class DatabaseManager:
                     json.dumps(metadata_dict)
                 ))
                 await db.commit()
+                self.logger.debug(f"[store_file_metadata] Successfully inserted metadata for file: {metadata.name} (ID: {metadata.file_id})")
                 self.logger.info(f"Stored metadata for file {metadata.name}")
         except Exception as e:
-            self.logger.error(f"Error storing file metadata: {e}")
+            self.logger.error(f"[store_file_metadata] Error storing file metadata for {metadata.name}: {e}", exc_info=True)
             raise
 
     async def get_file_metadata(self, file_id: str) -> Optional['FileMetadata']:
@@ -672,45 +674,34 @@ class DatabaseManager:
 
     async def get_all_files(self) -> List[Dict]:
         """Get all files from the database"""
-        self.logger.debug("Starting get_all_files")
+        self.logger.debug("[get_all_files] Starting get_all_files")
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                self.logger.debug("Connected to database")
-                # Get all files
+                self.logger.debug("[get_all_files] Connected to database")
                 query = "SELECT * FROM files"
-                self.logger.debug(f"Executing query: {query}")
+                self.logger.debug(f"[get_all_files] Executing query: {query}")
                 async with db.execute(query) as cursor:
                     rows = await cursor.fetchall()
-                    self.logger.debug(f"Retrieved {len(rows)} rows from database")
-                    
-                    # Get column names
+                    self.logger.debug(f"[get_all_files] Retrieved {len(rows)} rows from database")
                     columns = [description[0] for description in cursor.description]
-                    self.logger.debug(f"Column names: {columns}")
-                    
-                    # Convert rows to dictionaries
+                    self.logger.debug(f"[get_all_files] Column names: {columns}")
                     files = []
                     for row in rows:
                         try:
                             file_dict = dict(zip(columns, row))
-                            self.logger.debug(f"Processing row: {file_dict}")
-                            
-                            # Parse JSON fields
+                            self.logger.debug(f"[get_all_files] Row: {file_dict}")
                             if 'metadata' in file_dict and file_dict['metadata']:
                                 file_dict['metadata'] = json.loads(file_dict['metadata'])
                             if 'chunks' in file_dict and file_dict['chunks']:
                                 file_dict['chunks'] = json.loads(file_dict['chunks'])
                             if 'seen_by' in file_dict and file_dict['seen_by']:
                                 file_dict['seen_by'] = json.loads(file_dict['seen_by'])
-                            
                             files.append(file_dict)
-                            self.logger.debug(f"Added file to list: {file_dict['name']}")
                         except Exception as e:
-                            self.logger.error(f"Error processing row: {str(e)}")
+                            self.logger.error(f"[get_all_files] Error processing row: {str(e)}", exc_info=True)
                             continue
-                    
-                    self.logger.debug(f"Returning {len(files)} files")
+                    self.logger.debug(f"[get_all_files] Returning {len(files)} files")
                     return files
-                    
         except Exception as e:
-            self.logger.error(f"Error in get_all_files: {str(e)}")
+            self.logger.error(f"[get_all_files] Error in get_all_files: {str(e)}", exc_info=True)
             return [] 
