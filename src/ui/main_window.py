@@ -611,7 +611,7 @@ class MainWindow(QMainWindow):
             self.logger.error(f"Error updating UI: {e}")
 
     def update_file_list(self):
-        """Update the file list with current shared files"""
+        """Update the file list from the database."""
         self.logger.debug("Starting file list update")
         self.logger.debug(f"Current file list item count: {self.file_list.topLevelItemCount()}")
         
@@ -627,38 +627,34 @@ class MainWindow(QMainWindow):
         self.logger.debug("Started timer for async update")
         
     def _update_file_list_async(self):
-        """Asynchronous part of file list update"""
+        """Asynchronously update the file list."""
+
+        def handle_files(fut):
+            try:
+                files = fut.result()
+                self._update_file_list_ui(files)
+            except Exception as e:
+                self.logger.error(f"Error updating file list UI: {e}", exc_info=True)
+            finally:
+                self.file_list_updating = False
+
         try:
-            self.logger.debug("Starting async file list update")
-            
-            # Get the event loop
-            loop = asyncio.get_event_loop()
-            
-            # Create a future for the async operation
-            future = asyncio.run_coroutine_threadsafe(
-                self.file_manager.get_shared_files(),
-                loop
-            )
-            
-            def handle_files(fut):
-                try:
-                    files = fut.result()
-                    self.logger.debug(f"Retrieved {len(files)} files from file manager")
-                    # Update UI in main thread
-                    QTimer.singleShot(0, lambda: self._update_file_list_ui(files))
-                except Exception as e:
-                    self.logger.error(f"Error retrieving files: {e}")
-                    QTimer.singleShot(0, lambda: self._update_file_list_ui([]))
-            
-            # Add callback to handle the result
+            # Ensure we have a running event loop
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self.logger.warning("No running asyncio event loop, cannot update file list.")
+                self.file_list_updating = False
+                return
+
+            future = asyncio.ensure_future(self.file_manager.get_shared_files())
             future.add_done_callback(handle_files)
-            
         except Exception as e:
-            self.logger.error(f"Error in async file list update: {e}")
-            QTimer.singleShot(0, lambda: self._update_file_list_ui([]))
-            
+            self.logger.error(f"Error getting shared files: {e}", exc_info=True)
+            self.file_list_updating = False
+
     def _update_file_list_ui(self, files):
-        """Update UI with file list in main thread"""
+        """Update the file list widget with file data."""
         try:
             self.logger.debug("Starting UI update in main thread")
             for file in files:

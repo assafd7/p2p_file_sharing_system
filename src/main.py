@@ -6,6 +6,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import QTimer
 import logging
+import qasync
 
 from src.ui.main_window import MainWindow
 from src.ui.auth_window import AuthWindow
@@ -30,39 +31,16 @@ class P2PFileSharingApp:
         self.logger = get_logger("main")
         self.logger.info("Initializing P2P file sharing application")
         
-        # Set up logging
         setup_logging()
-        
-        # Create Qt application first
         self.app = QApplication(sys.argv)
         self.app.setApplicationName(WINDOW_TITLE)
-        
-        try:
-            # Create data directories
-            self.create_data_directories()
-            
-            # Initialize components
-            self.initialize_components()
-            
-            # Create auth window
-            self.auth_window = AuthWindow(self.db_manager, self.security_manager)
-            self.auth_window.auth_successful.connect(self.on_auth_successful)
-            self.auth_window.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
-            
-            # Set up asyncio event loop
-            self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
-            
-            # Set up timer for processing events
-            self.timer = QTimer()
-            self.timer.timeout.connect(self.process_events)
-            self.timer.start(100)  # Process events every 100ms
-            
-        except Exception as e:
-            self.logger.error(f"Error during initialization: {e}")
-            QMessageBox.critical(None, "Initialization Error", 
-                               f"Failed to initialize application: {str(e)}")
-            sys.exit(1)
+
+        self.db_manager = None
+        self.security_manager = None
+        self.dht = None
+        self.file_manager = None
+        self.auth_window = None
+        self.main_window = None
     
     def create_data_directories(self):
         """Create necessary data directories."""
@@ -82,51 +60,6 @@ class P2PFileSharingApp:
                 self.logger.error(f"Error creating directory {directory}: {e}")
                 raise
     
-    def initialize_components(self):
-        """Initialize application components."""
-        self.logger.info("Initializing application components")
-        
-        try:
-            # Initialize security manager
-            self.security_manager = SecurityManager()
-            self.logger.debug("Security manager initialized")
-            
-            # Initialize database manager
-            try:
-                self.db_manager = DatabaseManager(DB_PATH)
-                print(f"[DEBUG] DatabaseManager initialized with DB_PATH: {DB_PATH}")
-            except Exception as e:
-                print(f"[ERROR] Failed to initialize DatabaseManager: {e}", file=sys.stderr)
-                raise
-            
-            # Get local IP address
-            local_ip = self.get_local_ip()
-            self.logger.info(f"Local IP address: {local_ip}")
-            
-            # Initialize DHT with temporary username
-            self.dht = DHT(
-                host=local_ip,
-                port=DEFAULT_PORT,
-                bootstrap_nodes=BOOTSTRAP_NODES,
-                username="Anonymous",  # Will be updated after authentication
-                db_manager=self.db_manager  # Pass database manager to DHT
-            )
-            self.logger.debug("DHT initialized")
-            
-            # Initialize file manager with DHT
-            self.file_manager = FileManager(
-                storage_dir=FILES_DIR,
-                temp_dir=TEMP_DIR,
-                cache_dir=CACHE_DIR,
-                db_manager=self.db_manager,
-                dht=self.dht  # Pass DHT instance to FileManager
-            )
-            self.logger.debug("File manager initialized")
-            
-        except Exception as e:
-            self.logger.error(f"Error initializing components: {e}")
-            raise
-    
     def get_local_ip(self) -> str:
         """Get the local IP address."""
         try:
@@ -141,122 +74,88 @@ class P2PFileSharingApp:
             return DEFAULT_HOST
     
     async def initialize(self):
-        """Initialize async components."""
-        self.logger.info("Initializing async components")
+        """Create and initialize all application components asynchronously."""
         try:
-            # Initialize database
+            self.create_data_directories()
+
+            self.security_manager = SecurityManager()
+            self.db_manager = DatabaseManager(DB_PATH)
             await self.db_manager.initialize()
-            self.logger.debug("Database initialized")
-            
-            # Start DHT network
+
+            local_ip = self.get_local_ip()
+            self.dht = DHT(
+                host=local_ip,
+                port=DEFAULT_PORT,
+                bootstrap_nodes=BOOTSTRAP_NODES,
+                username="Anonymous",
+                db_manager=self.db_manager
+            )
             await self.dht.start()
-            self.logger.debug("DHT network started")
-            
-            # Join network using bootstrap nodes
             if BOOTSTRAP_NODES:
-                self.logger.info(f"Joining network using bootstrap nodes: {BOOTSTRAP_NODES}")
                 await self.dht.join_network(BOOTSTRAP_NODES)
-            else:
-                self.logger.info("No bootstrap nodes configured, starting as first node")
+
+            self.file_manager = FileManager(
+                storage_dir=FILES_DIR,
+                temp_dir=TEMP_DIR,
+                cache_dir=CACHE_DIR,
+                db_manager=self.db_manager,
+                dht=self.dht
+            )
+
+            self.auth_window = AuthWindow(self.db_manager, self.security_manager)
+            self.auth_window.auth_successful.connect(self.on_auth_successful)
+            return True
         except Exception as e:
-            self.logger.error(f"Error during async initialization: {e}")
-            raise
-    
-    def process_events(self):
-        """Process asyncio events."""
-        try:
-            self.loop.stop()
-            self.loop.run_until_complete(self.process_async_events())
-            self.loop.run_forever()
-        except Exception as e:
-            self.logger.error(f"Error processing events: {e}")
-    
-    async def process_async_events(self):
-        """Process async events."""
-        try:
-            # Process DHT events
-            if hasattr(self.dht, 'process_events'):
-                await self.dht.process_events()
-            # Process file transfer events
-            if hasattr(self.file_manager, 'process_events'):
-                await self.file_manager.process_events()
-        except Exception as e:
-            self.logger.error(f"Error processing async events: {e}")
+            self.logger.error(f"Error during initialization: {e}", exc_info=True)
+            QMessageBox.critical(None, "Initialization Error", f"Failed to initialize application: {str(e)}")
+            return False
     
     def on_auth_successful(self, user_id: str, username: str):
         """Handle successful authentication."""
-        try:
-            self.logger.info(f"User authenticated: {username} ({user_id})")
-            
-            # Update DHT username
-            self.dht.username = username
-            
-            # Create main window
-            self.main_window = MainWindow(
-                file_manager=self.file_manager,
-                network_manager=self.dht,
-                db_manager=self.db_manager,
-                user_id=user_id,
-                username=username
-            )
-            self.main_window.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
-            self.main_window.show()
-            
-            # Hide auth window
-            self.auth_window.hide()
-        except Exception as e:
-            self.logger.error(f"Error creating main window: {e}")
-            QMessageBox.critical(None, "Error", 
-                               f"Failed to create main window: {str(e)}")
-    
-    def run(self):
+        self.logger.info(f"User authenticated: {username} ({user_id})")
+        self.dht.username = username
+
+        self.main_window = MainWindow(
+            file_manager=self.file_manager,
+            network_manager=self.dht,
+            db_manager=self.db_manager,
+            user_id=user_id,
+            username=username
+        )
+        self.main_window.show()
+        self.auth_window.hide()
+
+    async def run(self):
         """Run the application."""
-        try:
-            self.logger.info("Starting application")
-            
-            # Initialize async components
-            self.loop.run_until_complete(self.initialize())
-            
-            # Show auth window
-            self.auth_window.show()
-            
-            # Run application
-            return self.app.exec()
-        except Exception as e:
-            self.logger.error(f"Error running application: {e}")
-            QMessageBox.critical(None, "Error", 
-                               f"Failed to run application: {str(e)}")
+        if not await self.initialize():
             return 1
-    
-    def cleanup(self):
+
+        self.auth_window.show()
+        return await self.app.exec()
+
+    async def cleanup(self):
         """Clean up resources."""
-        try:
-            self.logger.info("Cleaning up resources")
-            # Stop DHT network
-            if hasattr(self.dht, 'stop'):
-                self.loop.run_until_complete(self.dht.stop())
-            self.logger.debug("DHT network stopped")
-            
-            # Close database connection
-            self.loop.run_until_complete(self.db_manager.close())
-            self.logger.debug("Database connection closed")
-            
-            # Stop event loop
-            self.loop.stop()
-            self.logger.debug("Event loop stopped")
-        except Exception as e:
-            self.logger.error(f"Error during cleanup: {e}")
+        self.logger.info("Cleaning up resources")
+        if self.dht:
+            await self.dht.stop()
+        if self.db_manager:
+            await self.db_manager.close()
+        self.logger.info("Cleanup complete")
 
 def main():
-    """Main entry point."""
-    app = P2PFileSharingApp()
+    """Main entry point for the application."""
+    app_instance = P2PFileSharingApp()
+    loop = qasync.QEventLoop(app_instance.app)
+    asyncio.set_event_loop(loop)
+
     try:
-        return app.run()
-    except Exception as e:
-        print(f"Fatal error: {e}")
-        return 1
+        loop.run_until_complete(app_instance.run())
+    except KeyboardInterrupt:
+        app_instance.logger.info("Application interrupted by user")
     finally:
-        app.cleanup()
+        loop.run_until_complete(app_instance.cleanup())
+        loop.close()
+        app_instance.logger.info("Application exited")
 
 if __name__ == "__main__":
     sys.exit(main()) 
