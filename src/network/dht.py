@@ -320,12 +320,8 @@ class DHT:
     async def connect_to_peer(self, host: str, port: int) -> Optional[Peer]:
         """Connect to a peer."""
         try:
-            # Create connection with timeout
-            self.logger.info(f"Attempting to connect to {host}:{port}")
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port),
-                timeout=10.0  # 10 second timeout
-            )
+            # Create connection
+            reader, writer = await asyncio.open_connection(host, port)
             
             # Get peer address
             peer_addr = writer.get_extra_info('peername')
@@ -364,11 +360,8 @@ class DHT:
                 
             return peer
             
-        except asyncio.TimeoutError:
-            self.logger.error(f"Connection timeout to {host}:{port} - peer not reachable")
-            return None
         except Exception as e:
-            self.logger.error(f"Error connecting to peer {host}:{port}: {e}")
+            self.logger.error(f"Error connecting to peer: {e}")
             return None
 
     def _get_bucket_index(self, node_id: str) -> int:

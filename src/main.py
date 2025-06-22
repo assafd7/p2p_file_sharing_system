@@ -7,7 +7,6 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import QTimer
 import logging
 import qasync
-import platform
 
 from src.ui.main_window import MainWindow
 from src.ui.auth_window import AuthWindow
@@ -26,23 +25,16 @@ from src.config import (
 print(f"[DEBUG] Resolved DB_PATH: {DB_PATH} (absolute: {DB_PATH.resolve()})")
 logging.basicConfig(level=logging.DEBUG)
 
-# Windows-specific asyncio configuration
-if platform.system() == "Windows":
-    # Use ProactorEventLoop on Windows for better compatibility
-    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-
 class P2PFileSharingApp:
-    """Main application class for P2P File Sharing System."""
-    
     def __init__(self):
-        """Initialize the application."""
-        self.logger = get_logger(__name__)
-        self.logger.info("Initializing P2P File Sharing Application")
+        """Initialize the P2P file sharing application."""
+        self.logger = get_logger("main")
+        self.logger.info("Initializing P2P file sharing application")
         
         setup_logging()
         self.app = QApplication(sys.argv)
         self.app.setApplicationName(WINDOW_TITLE)
-        
+
         self.db_manager = None
         self.security_manager = None
         self.dht = None
@@ -139,7 +131,7 @@ class P2PFileSharingApp:
         except Exception as e:
             self.logger.error(f"Error creating GUI components: {e}", exc_info=True)
             return False
-    
+
     def on_auth_successful(self, user_id: str, username: str):
         """Handle successful authentication."""
         try:
@@ -163,7 +155,7 @@ class P2PFileSharingApp:
         except Exception as e:
             self.logger.error(f"Error creating main window: {e}", exc_info=True)
             QMessageBox.critical(None, "Error", f"Failed to create main window: {str(e)}")
-    
+
     async def cleanup(self):
         """Clean up resources."""
         self.logger.info("Cleaning up resources")
@@ -181,19 +173,8 @@ class P2PFileSharingApp:
 def main():
     """Main entry point for the application."""
     app_instance = P2PFileSharingApp()
-    
-    # Create qasync event loop with proper Windows configuration
-    try:
-        loop = qasync.QEventLoop(app_instance.app)
-        asyncio.set_event_loop(loop)
-        
-        # Set longer timeout for Windows
-        if platform.system() == "Windows":
-            # Increase timeout to avoid semaphore timeout issues
-            loop.slow_callback_duration = 1.0  # 1 second instead of default 0.1
-    except Exception as e:
-        print(f"Error setting up event loop: {e}")
-        return 1
+    loop = qasync.QEventLoop(app_instance.app)
+    asyncio.set_event_loop(loop)
 
     async def main_async():
         """Main async function."""
@@ -234,7 +215,7 @@ def main():
             return 1
         finally:
             await app_instance.cleanup()
-
+    
     try:
         return loop.run_until_complete(main_async())
     except KeyboardInterrupt:
@@ -244,10 +225,7 @@ def main():
         app_instance.logger.error(f"Fatal error: {e}", exc_info=True)
         return 1
     finally:
-        try:
-            loop.close()
-        except:
-            pass
+        loop.close()
         app_instance.logger.info("Application exited")
 
 if __name__ == "__main__":
