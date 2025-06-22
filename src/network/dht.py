@@ -126,8 +126,11 @@ class DHT:
         self.logger.info(f"Connecting to bootstrap nodes: {self.bootstrap_nodes}")
         for host, port in self.bootstrap_nodes:
             try:
-                await self.connect_to_peer(host, port)
-                self.logger.info(f"Successfully connected to bootstrap node {host}:{port}")
+                peer = await self.connect_to_peer(host, port)
+                if peer:
+                    self.logger.info(f"Successfully connected to bootstrap node {host}:{port}")
+                else:
+                    self.logger.warning(f"Failed to connect to bootstrap node {host}:{port} (connection returned None)")
             except Exception as e:
                 self.logger.error(f"Failed to connect to bootstrap node {host}:{port}: {e}")
             
@@ -350,7 +353,7 @@ class DHT:
                     self.logger.debug(f"Peer task for {peer_id} already exists and running")
                     return
             
-            # Create task with proper error handling
+            # Create task with proper error handling - NO CALLBACK
             task = asyncio.create_task(
                 self._handle_peer_messages_loop(peer), 
                 name=f"peer_messages_{peer_id}"
@@ -359,9 +362,7 @@ class DHT:
             # Store the task
             self._peer_tasks[peer_id] = task
             
-            # Add callback to clean up task when it's done
-            task.add_done_callback(lambda t: self._cleanup_peer_task(peer_id, t))
-            
+            # Don't add callback - we'll handle cleanup differently
             self.logger.debug(f"Started peer message task for {peer_id}")
             
         except Exception as e:
@@ -437,6 +438,7 @@ class DHT:
 
     async def _handle_peer_messages_loop(self, peer: Peer):
         """Handle messages from a peer in a continuous loop as a background task."""
+        peer_id = peer.id
         try:
             while peer.is_connected and not peer.is_disconnecting:
                 try:
@@ -464,7 +466,7 @@ class DHT:
                     continue
                 except asyncio.CancelledError:
                     # Task was cancelled, exit gracefully
-                    self.logger.debug(f"Peer message loop cancelled for {peer.id}")
+                    self.logger.debug(f"Peer message loop cancelled for {peer_id}")
                     break
                 except Exception as e:
                     self.logger.error(f"Error in message handling loop: {e}")
@@ -472,12 +474,17 @@ class DHT:
                     
         except asyncio.CancelledError:
             # Task was cancelled, exit gracefully
-            self.logger.debug(f"Peer message loop cancelled for {peer.id}")
+            self.logger.debug(f"Peer message loop cancelled for {peer_id}")
         except Exception as e:
             self.logger.error(f"Error in peer message loop: {e}")
         finally:
+            # Clean up task tracking
+            if peer_id in self._peer_tasks:
+                del self._peer_tasks[peer_id]
+            self.logger.debug(f"Cleaned up peer task for {peer_id}")
+            
             # Only call disconnect if we're not already disconnecting
-            if peer.id in self.peers:
+            if peer_id in self.peers:
                 await self._handle_peer_disconnect(peer)
 
     def _get_bucket_index(self, node_id: str) -> int:

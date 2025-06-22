@@ -675,9 +675,8 @@ class MainWindow(QMainWindow):
             
             if peer:
                 self.show_info(f"Successfully connected to {address}")
-                # Update peer list after a short delay to allow the connection to be established
-                await asyncio.sleep(0.1)
-                self.update_peer_list()  # Refresh peer list
+                # Defer peer list update to avoid task conflicts
+                asyncio.create_task(self._deferred_update_peer_list())
             else:
                 self.show_error(f"Failed to connect to {address}")
             
@@ -686,6 +685,16 @@ class MainWindow(QMainWindow):
             self.show_error(f"Error connecting to peer: {str(e)}")
         finally:
             self._async_operation_in_progress = False
+
+    async def _deferred_update_peer_list(self):
+        """Update peer list after a delay to avoid task conflicts."""
+        try:
+            # Wait a bit for the connection to fully establish
+            await asyncio.sleep(0.2)
+            # Update peer list in the main thread
+            self.update_peer_list()
+        except Exception as e:
+            self.logger.error(f"Error in deferred peer list update: {e}")
 
     def disconnect_from_peer(self):
         """Disconnect from a selected peer."""
