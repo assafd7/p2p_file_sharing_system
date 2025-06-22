@@ -3,36 +3,14 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QMessageBox,
     QStackedWidget, QFormLayout
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QThread
+from PyQt6.QtCore import Qt, pyqtSignal
 import uuid
 import logging
 import asyncio
+import qasync
 from src.database.db_manager import DatabaseManager
 from src.network.security import SecurityManager
 from typing import Tuple
-
-class AuthWorker(QThread):
-    """Worker thread for authentication operations."""
-    
-    finished = pyqtSignal(bool, str, str)  # success, user_id, username
-    error = pyqtSignal(str)  # error message
-    
-    def __init__(self, operation, *args, **kwargs):
-        super().__init__()
-        self.operation = operation
-        self.args = args
-        self.kwargs = kwargs
-    
-    def run(self):
-        """Run the authentication operation."""
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(self.operation(*self.args, **self.kwargs))
-            loop.close()
-            self.finished.emit(True, *result)
-        except Exception as e:
-            self.error.emit(str(e))
 
 class AuthWindow(QMainWindow):
     """Authentication window for login and registration."""
@@ -45,7 +23,6 @@ class AuthWindow(QMainWindow):
         self.db_manager = db_manager
         self.security_manager = security_manager
         self.logger = logging.getLogger("AuthWindow")
-        self.auth_worker = None  # Store reference to worker
         
         self.setWindowTitle("P2P File Sharing - Authentication")
         self.setMinimumSize(400, 300)
@@ -145,7 +122,8 @@ class AuthWindow(QMainWindow):
         
         layout.addLayout(button_layout)
     
-    def handle_login(self):
+    @qasync.asyncSlot()
+    async def handle_login(self):
         """Handle login button click."""
         username = self.login_username.text().strip()
         password = self.login_password.text()
@@ -153,19 +131,15 @@ class AuthWindow(QMainWindow):
         if not username or not password:
             QMessageBox.warning(self, "Error", "Please enter both username and password")
             return
-        
-        # Clean up previous worker if needed
-        if self.auth_worker is not None:
-            self.auth_worker.wait()
-            self.auth_worker = None
-        self.auth_worker = AuthWorker(self._login_async, username, password)
-        self.auth_worker.finished.connect(self._on_auth_success)
-        self.auth_worker.error.connect(self._on_auth_error)
-        self.auth_worker.finished.connect(self._cleanup_worker)
-        self.auth_worker.error.connect(self._cleanup_worker)
-        self.auth_worker.start()
+        try:
+            user_id, username = await self._login_async(username, password)
+            self.auth_successful.emit(user_id, username)
+            self.close()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
     
-    def handle_register(self):
+    @qasync.asyncSlot()
+    async def handle_register(self):
         """Handle register button click."""
         username = self.register_username.text().strip()
         password = self.register_password.text()
@@ -174,21 +148,15 @@ class AuthWindow(QMainWindow):
         if not username or not password or not confirm:
             QMessageBox.warning(self, "Error", "Please fill in all fields")
             return
-        
         if password != confirm:
             QMessageBox.warning(self, "Error", "Passwords do not match")
             return
-        
-        # Clean up previous worker if needed
-        if self.auth_worker is not None:
-            self.auth_worker.wait()
-            self.auth_worker = None
-        self.auth_worker = AuthWorker(self._register_async, username, password)
-        self.auth_worker.finished.connect(self._on_auth_success)
-        self.auth_worker.error.connect(self._on_auth_error)
-        self.auth_worker.finished.connect(self._cleanup_worker)
-        self.auth_worker.error.connect(self._cleanup_worker)
-        self.auth_worker.start()
+        try:
+            user_id, username = await self._register_async(username, password)
+            self.auth_successful.emit(user_id, username)
+            self.close()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
     
     async def _login_async(self, username: str, password: str) -> Tuple[str, str]:
         """Async login operation."""
@@ -223,19 +191,4 @@ class AuthWindow(QMainWindow):
         # Add user to database
         await self.db_manager.add_user(user_id, username, password_hash)
         
-        return user_id, username
-    
-    def _on_auth_success(self, success: bool, user_id: str, username: str):
-        """Handle successful authentication."""
-        if success:
-            self.auth_successful.emit(user_id, username)
-            self.close()
-    
-    def _on_auth_error(self, error: str):
-        """Handle authentication error."""
-        QMessageBox.critical(self, "Error", str(error))
-    
-    def _cleanup_worker(self, *args):
-        if self.auth_worker is not None:
-            self.auth_worker.wait()
-            self.auth_worker = None 
+        return user_id, username 
