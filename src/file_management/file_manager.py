@@ -16,18 +16,6 @@ from src.file_management.file_transfer import FileTransfer
 from src.file_management.file_metadata import FileMetadata, FileMetadataManager, FileChunk
 from src.network.dht import DHT
 
-@dataclass
-class FileMetadata:
-    """Metadata for a file in the system."""
-    name: str
-    size: int
-    created_at: datetime
-    modified_at: datetime
-    hash: str
-    chunks: List[FileChunk]
-    owner_id: str
-    permissions: Dict[str, List[str]]  # user_id -> ['read', 'write', 'share']
-
 class FileManagerError(Exception):
     """Exception raised for file manager errors."""
     pass
@@ -120,8 +108,40 @@ class FileManager:
             True if successful, False otherwise
         """
         try:
-            # Get file metadata
-            metadata = await self.metadata_manager.get_metadata(file_id)
+            # Get file metadata from database
+            files = await self.db_manager.get_all_files()
+            metadata = None
+            for file_data in files:
+                if file_data['file_id'] == file_id:
+                    # Convert database row to FileMetadata object
+                    is_available = bool(file_data.get('is_available', True))
+                    ttl = int(file_data.get('ttl', 10))
+                    seen_by = file_data.get('seen_by')
+                    if seen_by is None:
+                        seen_by = []
+                    elif isinstance(seen_by, str):
+                        seen_by = json.loads(seen_by)
+                    chunks = file_data.get('chunks')
+                    if chunks is None:
+                        chunks = []
+                    elif isinstance(chunks, str):
+                        chunks = json.loads(chunks)
+                    
+                    metadata = FileMetadata(
+                        file_id=file_data['file_id'],
+                        name=file_data['name'],
+                        size=file_data['size'],
+                        hash=file_data['hash'],
+                        owner_id=file_data['owner_id'],
+                        owner_name=file_data['owner_name'],
+                        upload_time=datetime.fromisoformat(file_data['upload_time']),
+                        is_available=is_available,
+                        ttl=ttl,
+                        seen_by=set(seen_by),
+                        chunks=[FileChunk(**chunk) for chunk in chunks]
+                    )
+                    break
+            
             if not metadata:
                 raise FileManagerError("File not found")
             
@@ -129,12 +149,17 @@ class FileManager:
             if metadata.owner_id != user_id:
                 raise FileManagerError("Permission denied: You can only delete your own files")
             
-            # Delete file
-            file_path = self._get_file_path(file_id)
-            if file_path.exists():
-                shutil.rmtree(file_path)
+            # Delete the actual file from storage
+            storage_path = self.storage_dir / f"{metadata.file_id}_{metadata.name}"
+            if storage_path.exists():
+                storage_path.unlink()  # Delete the file
+                self.logger.debug(f"Deleted file from storage: {storage_path}")
             
-            # Remove metadata
+            # Remove metadata from database
+            await self.db_manager.delete_file_metadata(file_id)
+            self.logger.debug(f"Deleted metadata from database for file_id: {file_id}")
+            
+            # Remove from in-memory metadata manager if it exists
             await self.metadata_manager.remove_metadata(file_id)
             
             # Broadcast deletion if DHT is available
@@ -142,6 +167,7 @@ class FileManager:
                 try:
                     metadata.is_available = False
                     await self.dht.broadcast_file_metadata(metadata)
+                    self.logger.debug("Broadcasted file deletion to network")
                 except Exception as e:
                     self.logger.error(f"Error broadcasting file deletion: {e}")
             

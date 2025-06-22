@@ -13,6 +13,7 @@ from datetime import datetime
 import os
 from pathlib import Path
 import asyncio
+import qasync
 
 from src.file_management.file_manager import FileManager
 from src.network.dht import DHT
@@ -443,9 +444,20 @@ class MainWindow(QMainWindow):
                     self.show_warning("Please select a file to delete")
                     return
                 item = selected_items[0]
-                file_id = item.data(0, Qt.ItemDataRole.UserRole)
+                file_data = item.data(0, Qt.ItemDataRole.UserRole)
+                if not file_data:
+                    self.show_error("No file data found")
+                    return
+                file_id = file_data.file_id
             else:
-                file_id = file_info.file_id
+                # Handle both FileMetadata objects and dictionaries
+                if hasattr(file_info, 'file_id'):
+                    file_id = file_info.file_id
+                elif isinstance(file_info, dict) and 'file_id' in file_info:
+                    file_id = file_info['file_id']
+                else:
+                    self.show_error("Invalid file info format")
+                    return
             
             # Confirm deletion
             reply = QMessageBox.question(
@@ -457,35 +469,103 @@ class MainWindow(QMainWindow):
             )
             
             if reply == QMessageBox.StandardButton.Yes:
+                # Stop the update timer to prevent qasync conflicts
+                self.update_timer.stop()
+                
                 # Show progress dialog
                 progress = QProgressBar()
                 progress.setRange(0, 0)  # Indeterminate progress
                 progress_dialog = QMessageBox(self)
                 progress_dialog.setWindowTitle("Deleting File")
                 progress_dialog.setText("Removing file from network...")
-                progress_dialog.setStandardButtons(QMessageBox.NoButton)
+                progress_dialog.setStandardButtons(QMessageBox.StandardButton.NoButton)
                 progress_dialog.layout().addWidget(progress)
                 progress_dialog.show()
                 
-                # Delete file in background
-                async def delete():
-                    try:
-                        success = await self.file_manager.delete_file(file_id, self.user_id)
-                        if success:
-                            self.show_info("File deleted successfully")
-                            self.update_file_list()  # Refresh file list
-                        else:
-                            self.show_error("Failed to delete file")
-                    except Exception as e:
-                        self.show_error(f"Error deleting file: {str(e)}")
-                    finally:
-                        progress_dialog.close()
-                
-                # Run async operation
-                asyncio.create_task(delete())
+                # Call the async delete method
+                self._delete_file_async(file_id, progress_dialog)
             
         except Exception as e:
             self.show_error(f"Error deleting file: {str(e)}")
+
+    @qasync.asyncSlot()
+    async def _delete_file_async(self, file_id: str, progress_dialog: QMessageBox):
+        """Asynchronously delete a file."""
+        try:
+            self.logger.debug(f"[qasync] Starting delete for file_id: {file_id}")
+            success = await self.file_manager.delete_file(file_id, self.user_id)
+            if success:
+                self.show_info("File deleted successfully")
+                # Update UI synchronously to avoid qasync conflicts
+                self._update_file_list_direct()
+            else:
+                self.show_error("Failed to delete file")
+        except Exception as e:
+            self.logger.error(f"Error in async delete: {e}", exc_info=True)
+            self.show_error(f"Error deleting file: {str(e)}")
+        finally:
+            # Ensure progress dialog is closed
+            if progress_dialog and not progress_dialog.isHidden():
+                progress_dialog.close()
+                progress_dialog.deleteLater()
+            
+            # Restart the update timer
+            self.update_timer.start(1000)
+
+    def _update_file_list_direct(self):
+        """Update file list directly from database without async calls."""
+        try:
+            self.logger.debug("Starting direct file list update")
+            
+            # Get files directly from database using sync method
+            files_data = self.db_manager.get_all_files_sync()
+            
+            # Convert to FileMetadata objects
+            from src.file_management.file_metadata import FileMetadata, FileChunk
+            from datetime import datetime
+            import json
+            
+            files = []
+            for file_data in files_data:
+                try:
+                    is_available = bool(file_data.get('is_available', True))
+                    ttl = int(file_data.get('ttl', 10))
+                    seen_by = file_data.get('seen_by')
+                    if seen_by is None:
+                        seen_by = []
+                    elif isinstance(seen_by, str):
+                        seen_by = json.loads(seen_by)
+                    chunks = file_data.get('chunks')
+                    if chunks is None:
+                        chunks = []
+                    elif isinstance(chunks, str):
+                        chunks = json.loads(chunks)
+                    
+                    metadata = FileMetadata(
+                        file_id=file_data['file_id'],
+                        name=file_data['name'],
+                        size=file_data['size'],
+                        hash=file_data['hash'],
+                        owner_id=file_data['owner_id'],
+                        owner_name=file_data['owner_name'],
+                        upload_time=datetime.fromisoformat(file_data['upload_time']),
+                        is_available=is_available,
+                        ttl=ttl,
+                        seen_by=set(seen_by),
+                        chunks=[FileChunk(**chunk) for chunk in chunks]
+                    )
+                    files.append(metadata)
+                except Exception as e:
+                    self.logger.error(f"Error processing file data: {e}")
+                    continue
+            
+            # Update UI with the files
+            self._update_file_list_ui(files)
+            
+        except Exception as e:
+            self.logger.error(f"Error in direct file list update: {e}")
+            # Don't call async methods to avoid qasync conflicts
+            # The UI will be updated on the next manual refresh or app restart
 
     def pause_transfer(self):
         """Pause a selected transfer."""
@@ -612,51 +692,55 @@ class MainWindow(QMainWindow):
 
     def update_file_list(self):
         """Update the file list from the database."""
+        # Don't update if we're already updating to prevent flickering
+        if hasattr(self, '_file_list_updating') and self._file_list_updating:
+            return
+            
+        self._file_list_updating = True
         self.logger.debug("Starting file list update")
         self.logger.debug(f"Current file list item count: {self.file_list.topLevelItemCount()}")
         
-        # Clear the list
-        self.file_list.clear()
-        self.logger.debug("Cleared file list")
-        
-        # Create a timer for async operation
-        timer = QTimer()
-        timer.setSingleShot(True)
-        timer.timeout.connect(lambda: self._update_file_list_async())
-        timer.start(0)  # Start immediately
-        self.logger.debug("Started timer for async update")
-        
-    def _update_file_list_async(self):
+        # Call the async slot directly
+        self._update_file_list_async()
+        self.logger.debug("Called async file list update")
+
+    @qasync.asyncSlot()
+    async def _update_file_list_async(self):
         """Asynchronously update the file list."""
-
-        def handle_files(fut):
-            try:
-                files = fut.result()
-                self._update_file_list_ui(files)
-            except Exception as e:
-                self.logger.error(f"Error updating file list UI: {e}", exc_info=True)
-            finally:
-                self.file_list_updating = False
-
+        self.logger.debug("[qasync] Entered _update_file_list_async")
         try:
-            # Ensure we have a running event loop
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                self.logger.warning("No running asyncio event loop, cannot update file list.")
-                self.file_list_updating = False
-                return
-
-            future = asyncio.ensure_future(self.file_manager.get_shared_files())
-            future.add_done_callback(handle_files)
+            files = await self.file_manager.get_shared_files()
+            self.logger.debug(f"[qasync] Got {len(files)} files from get_shared_files")
+            self._update_file_list_ui(files)
         except Exception as e:
-            self.logger.error(f"Error getting shared files: {e}", exc_info=True)
-            self.file_list_updating = False
+            self.logger.error(f"Error in async file list update: {e}", exc_info=True)
+        finally:
+            self._file_list_updating = False
 
     def _update_file_list_ui(self, files):
         """Update the file list widget with file data."""
         try:
             self.logger.debug("Starting UI update in main thread")
+            
+            # Check if the content has actually changed
+            current_files = set()
+            for i in range(self.file_list.topLevelItemCount()):
+                item = self.file_list.topLevelItem(i)
+                file_data = item.data(0, Qt.ItemDataRole.UserRole)
+                if file_data:
+                    current_files.add(file_data.file_id)
+            
+            new_files = {file.file_id for file in files}
+            
+            # Only update if content has changed
+            if current_files == new_files:
+                self.logger.debug("File list content unchanged, skipping UI update")
+                return
+            
+            # Clear and rebuild the list
+            self.file_list.clear()
+            self.logger.debug("Cleared file list for update")
+            
             for file in files:
                 try:
                     self.logger.debug(f"Processing file: {file.name}")

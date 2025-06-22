@@ -704,4 +704,61 @@ class DatabaseManager:
                     return files
         except Exception as e:
             self.logger.error(f"[get_all_files] Error in get_all_files: {str(e)}", exc_info=True)
-            return [] 
+            return []
+
+    def get_all_files_sync(self) -> List[Dict]:
+        """Get all files from the database synchronously"""
+        self.logger.debug("[get_all_files_sync] Starting get_all_files_sync")
+        try:
+            with sqlite3.connect(self.db_path) as db:
+                self.logger.debug("[get_all_files_sync] Connected to database")
+                query = "SELECT * FROM files"
+                self.logger.debug(f"[get_all_files_sync] Executing query: {query}")
+                cursor = db.execute(query)
+                rows = cursor.fetchall()
+                self.logger.debug(f"[get_all_files_sync] Retrieved {len(rows)} rows from database")
+                columns = [description[0] for description in cursor.description]
+                self.logger.debug(f"[get_all_files_sync] Column names: {columns}")
+                files = []
+                for row in rows:
+                    try:
+                        file_dict = dict(zip(columns, row))
+                        self.logger.debug(f"[get_all_files_sync] Row: {file_dict}")
+                        if 'metadata' in file_dict and file_dict['metadata']:
+                            file_dict['metadata'] = json.loads(file_dict['metadata'])
+                        if 'chunks' in file_dict and file_dict['chunks']:
+                            file_dict['chunks'] = json.loads(file_dict['chunks'])
+                        if 'seen_by' in file_dict and file_dict['seen_by']:
+                            file_dict['seen_by'] = json.loads(file_dict['seen_by'])
+                        files.append(file_dict)
+                    except Exception as e:
+                        self.logger.error(f"[get_all_files_sync] Error processing row: {str(e)}", exc_info=True)
+                        continue
+                self.logger.debug(f"[get_all_files_sync] Returning {len(files)} files")
+                return files
+        except Exception as e:
+            self.logger.error(f"[get_all_files_sync] Error in get_all_files_sync: {str(e)}", exc_info=True)
+            return []
+
+    async def delete_file_metadata(self, file_id: str) -> bool:
+        """Delete file metadata from the database."""
+        try:
+            self.logger.debug(f"[delete_file_metadata] Deleting file metadata for file_id: {file_id}")
+            async with aiosqlite.connect(self.db_path) as db:
+                # Delete from files table
+                cursor = await db.execute(
+                    "DELETE FROM files WHERE file_id = ?",
+                    (file_id,)
+                )
+                deleted_count = cursor.rowcount
+                await db.commit()
+                
+                if deleted_count > 0:
+                    self.logger.debug(f"[delete_file_metadata] Successfully deleted file metadata for file_id: {file_id}")
+                    return True
+                else:
+                    self.logger.warning(f"[delete_file_metadata] No file found with file_id: {file_id}")
+                    return False
+        except Exception as e:
+            self.logger.error(f"[delete_file_metadata] Error deleting file metadata for file_id {file_id}: {e}", exc_info=True)
+            return False 

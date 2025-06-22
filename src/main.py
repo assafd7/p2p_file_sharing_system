@@ -73,16 +73,21 @@ class P2PFileSharingApp:
             self.logger.warning(f"Could not determine local IP: {e}")
             return DEFAULT_HOST
     
-    async def initialize(self):
-        """Create and initialize all application components asynchronously."""
+    async def initialize_async_components(self):
+        """Initialize async components (database, network, etc.)."""
         try:
             self.create_data_directories()
 
             self.security_manager = SecurityManager()
+            self.logger.debug("Security manager initialized")
+            
             self.db_manager = DatabaseManager(DB_PATH)
             await self.db_manager.initialize()
-
+            self.logger.debug("Database manager initialized")
+            
             local_ip = self.get_local_ip()
+            self.logger.info(f"Local IP address: {local_ip}")
+            
             self.dht = DHT(
                 host=local_ip,
                 port=DEFAULT_PORT,
@@ -91,9 +96,8 @@ class P2PFileSharingApp:
                 db_manager=self.db_manager
             )
             await self.dht.start()
-            if BOOTSTRAP_NODES:
-                await self.dht.join_network(BOOTSTRAP_NODES)
-
+            self.logger.debug("DHT initialized and started")
+            
             self.file_manager = FileManager(
                 storage_dir=FILES_DIR,
                 temp_dir=TEMP_DIR,
@@ -101,45 +105,69 @@ class P2PFileSharingApp:
                 db_manager=self.db_manager,
                 dht=self.dht
             )
-
-            self.auth_window = AuthWindow(self.db_manager, self.security_manager)
-            self.auth_window.auth_successful.connect(self.on_auth_successful)
+            self.logger.debug("File manager initialized")
+            
+            if BOOTSTRAP_NODES:
+                await self.dht.join_network(BOOTSTRAP_NODES)
+                self.logger.info(f"Joined network using bootstrap nodes: {BOOTSTRAP_NODES}")
+            else:
+                self.logger.info("No bootstrap nodes configured, starting as first node")
+                
             return True
+            
         except Exception as e:
-            self.logger.error(f"Error during initialization: {e}", exc_info=True)
+            self.logger.error(f"Error during async initialization: {e}", exc_info=True)
             QMessageBox.critical(None, "Initialization Error", f"Failed to initialize application: {str(e)}")
             return False
-    
+
+    def create_gui_components(self):
+        """Create GUI components."""
+        try:
+            self.auth_window = AuthWindow(self.db_manager, self.security_manager)
+            self.auth_window.auth_successful.connect(self.on_auth_successful)
+            self.auth_window.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
+            self.logger.debug("Auth window created")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error creating GUI components: {e}", exc_info=True)
+            return False
+
     def on_auth_successful(self, user_id: str, username: str):
         """Handle successful authentication."""
-        self.logger.info(f"User authenticated: {username} ({user_id})")
-        self.dht.username = username
-
-        self.main_window = MainWindow(
-            file_manager=self.file_manager,
-            network_manager=self.dht,
-            db_manager=self.db_manager,
-            user_id=user_id,
-            username=username
-        )
-        self.main_window.show()
-        self.auth_window.hide()
-
-    async def run(self):
-        """Run the application."""
-        if not await self.initialize():
-            return 1
-
-        self.auth_window.show()
-        return await self.app.exec()
+        try:
+            self.logger.info(f"User authenticated: {username} ({user_id})")
+            
+            self.dht.username = username
+            
+            self.main_window = MainWindow(
+                file_manager=self.file_manager,
+                network_manager=self.dht,
+                db_manager=self.db_manager,
+                user_id=user_id,
+                username=username
+            )
+            self.main_window.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
+            self.main_window.show()
+            
+            self.auth_window.hide()
+            self.logger.debug("Main window created and shown")
+            
+        except Exception as e:
+            self.logger.error(f"Error creating main window: {e}", exc_info=True)
+            QMessageBox.critical(None, "Error", f"Failed to create main window: {str(e)}")
 
     async def cleanup(self):
         """Clean up resources."""
         self.logger.info("Cleaning up resources")
-        if self.dht:
-            await self.dht.stop()
-        if self.db_manager:
-            await self.db_manager.close()
+        try:
+            if hasattr(self, 'dht') and self.dht:
+                await self.dht.stop()
+                self.logger.debug("DHT stopped")
+            if hasattr(self, 'db_manager') and self.db_manager:
+                await self.db_manager.close()
+                self.logger.debug("Database closed")
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {e}")
         self.logger.info("Cleanup complete")
 
 def main():
@@ -148,12 +176,55 @@ def main():
     loop = qasync.QEventLoop(app_instance.app)
     asyncio.set_event_loop(loop)
 
+    async def main_async():
+        """Main async function."""
+        try:
+            # Initialize async components
+            if not await app_instance.initialize_async_components():
+                return 1
+            
+            # Create GUI components
+            if not app_instance.create_gui_components():
+                return 1
+            
+            # Show auth window
+            app_instance.auth_window.show()
+            
+            # Create a future that will be cancelled when the app closes
+            # This keeps the event loop running properly
+            app_future = asyncio.Future()
+            
+            # Set up a callback to cancel the future when the app is about to quit
+            def on_about_to_quit():
+                if not app_future.done():
+                    app_future.cancel()
+            
+            app_instance.app.aboutToQuit.connect(on_about_to_quit)
+            
+            # Wait for the future to be cancelled (when app closes)
+            try:
+                await app_future
+            except asyncio.CancelledError:
+                # This is expected when the app closes
+                pass
+            
+            return 0
+            
+        except Exception as e:
+            app_instance.logger.error(f"Application error: {e}", exc_info=True)
+            return 1
+        finally:
+            await app_instance.cleanup()
+    
     try:
-        loop.run_until_complete(app_instance.run())
+        return loop.run_until_complete(main_async())
     except KeyboardInterrupt:
         app_instance.logger.info("Application interrupted by user")
+        return 0
+    except Exception as e:
+        app_instance.logger.error(f"Fatal error: {e}", exc_info=True)
+        return 1
     finally:
-        loop.run_until_complete(app_instance.cleanup())
         loop.close()
         app_instance.logger.info("Application exited")
 
