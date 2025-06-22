@@ -26,6 +26,7 @@ class MessageType(Enum):
     CHUNK_RESPONSE = "chunk_response"
     STORE = "store"
     FIND_VALUE = "find_value"
+    FIND_NODE = "find_node"
 
 @dataclass
 class Message:
