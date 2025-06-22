@@ -738,7 +738,7 @@ class DatabaseManager:
                 return files
         except Exception as e:
             self.logger.error(f"[get_all_files_sync] Error in get_all_files_sync: {str(e)}", exc_info=True)
-            return []
+            return [] 
 
     async def delete_file_metadata(self, file_id: str) -> bool:
         """Delete file metadata from the database."""

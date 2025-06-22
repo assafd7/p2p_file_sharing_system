@@ -34,7 +34,7 @@ class P2PFileSharingApp:
         setup_logging()
         self.app = QApplication(sys.argv)
         self.app.setApplicationName(WINDOW_TITLE)
-
+        
         self.db_manager = None
         self.security_manager = None
         self.dht = None
@@ -58,7 +58,7 @@ class P2PFileSharingApp:
                 self.logger.debug(f"Directory {directory} is ready for use")
             except Exception as e:
                 self.logger.error(f"Error creating directory {directory}: {e}")
-                raise
+            raise
     
     def get_local_ip(self) -> str:
         """Get the local IP address."""
@@ -131,7 +131,7 @@ class P2PFileSharingApp:
         except Exception as e:
             self.logger.error(f"Error creating GUI components: {e}", exc_info=True)
             return False
-
+    
     def on_auth_successful(self, user_id: str, username: str):
         """Handle successful authentication."""
         try:
@@ -155,7 +155,7 @@ class P2PFileSharingApp:
         except Exception as e:
             self.logger.error(f"Error creating main window: {e}", exc_info=True)
             QMessageBox.critical(None, "Error", f"Failed to create main window: {str(e)}")
-
+    
     async def cleanup(self):
         """Clean up resources."""
         self.logger.info("Cleaning up resources")
@@ -215,7 +215,7 @@ def main():
             return 1
         finally:
             await app_instance.cleanup()
-    
+
     try:
         return loop.run_until_complete(main_async())
     except KeyboardInterrupt:
