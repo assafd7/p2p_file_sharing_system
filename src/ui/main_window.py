@@ -16,8 +16,9 @@ import asyncio
 import qasync
 
 from src.file_management.file_manager import FileManager
-from src.network.dht import DHT
+from src.network.dht import DHT, Peer
 from src.database.db_manager import DatabaseManager
+from src.file_management.file_metadata import FileMetadata
 
 class TransferWorker(QThread):
     progress_updated = pyqtSignal(str, float, str)  # transfer_id, progress, status
@@ -46,12 +47,12 @@ class TransferWorker(QThread):
 class MainWindow(QMainWindow):
     """Main window of the P2P file sharing application."""
     
-    def __init__(self, file_manager: FileManager, network_manager: DHT,
+    def __init__(self, file_manager: FileManager, dht: DHT,
                  db_manager: DatabaseManager, user_id: str, username: str):
         """Initialize the main window."""
         super().__init__()
         self.file_manager = file_manager
-        self.network_manager = network_manager
+        self.dht = dht
         self.db_manager = db_manager
         self.user_id = user_id
         self.username = username
@@ -62,7 +63,9 @@ class MainWindow(QMainWindow):
         self._async_operation_in_progress = False
 
         # Set up network manager callbacks
-        self.network_manager.on_file_metadata_received = self.on_file_metadata_received
+        self.dht.on_file_metadata_received = self.on_file_metadata_received
+        self.dht.on_peer_connected = self.on_peer_connected
+        self.dht.on_peer_disconnected = self.on_peer_disconnected
 
         # Set window properties
         self.setWindowTitle("P2P File Sharing System")
@@ -103,9 +106,9 @@ class MainWindow(QMainWindow):
         self.setup_menu_bar()
 
         # Setup update timer
-        self.update_timer = QTimer()
-        self.update_timer.timeout.connect(self.update_ui)
-        self.update_timer.start(1000)  # Update every second
+        self._update_timer = QTimer(self)
+        self._update_timer.timeout.connect(self.update_peer_list)
+        self._update_timer.start(5000) # Update peer list every 5 seconds
         
         # File list update control
         self._file_list_updating = False
@@ -118,7 +121,7 @@ class MainWindow(QMainWindow):
         self.file_manager.start()
 
         # Initial UI update
-        QTimer.singleShot(0, self.update_ui)
+        QTimer.singleShot(0, self.update_file_list)
 
     def setup_files_tab(self):
         """Setup the files tab with file list and controls."""
@@ -127,11 +130,10 @@ class MainWindow(QMainWindow):
 
         # Create file list
         self.file_list = QTreeWidget()
-        self.file_list.setHeaderLabels(["Name", "Size", "Owner", "Status"])
+        self.file_list.setHeaderLabels(["Name", "Size", "Owner"])
         self.file_list.setColumnWidth(0, 300)  # Name column
         self.file_list.setColumnWidth(1, 100)  # Size column
         self.file_list.setColumnWidth(2, 150)  # Owner column
-        self.file_list.setColumnWidth(3, 100)  # Status column
         self.file_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.file_list.customContextMenuRequested.connect(self.show_context_menu)
         layout.addWidget(self.file_list)
@@ -191,7 +193,7 @@ class MainWindow(QMainWindow):
         button_layout = QHBoxLayout()
         
         connect_button = QPushButton("Connect to Peer")
-        connect_button.clicked.connect(self.connect_to_peer)
+        connect_button.clicked.connect(self.connect_to_peer_dialog)
         button_layout.addWidget(connect_button)
         
         disconnect_button = QPushButton("Disconnect")
@@ -246,29 +248,24 @@ class MainWindow(QMainWindow):
     def setup_menu_bar(self):
         """Setup the menu bar with actions."""
         menubar = self.menuBar()
+        if menubar is None: return
 
-        # File menu
-        file_menu = menubar.addMenu("File")
-        
-        share_action = QAction("Share File", self)
+        file_menu = menubar.addMenu('&File')
+        share_action = QAction('Share File', self)
         share_action.triggered.connect(self.share_file)
         file_menu.addAction(share_action)
         
-        exit_action = QAction("Exit", self)
+        exit_action = QAction('Exit', self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
-
-        # View menu
-        view_menu = menubar.addMenu("View")
         
-        refresh_action = QAction("Refresh", self)
-        refresh_action.triggered.connect(self.update_ui)
+        view_menu = menubar.addMenu('&View')
+        refresh_action = QAction('Refresh File List', self)
+        refresh_action.triggered.connect(self.update_file_list)
         view_menu.addAction(refresh_action)
 
-        # Help menu
-        help_menu = menubar.addMenu("Help")
-        
-        about_action = QAction("About", self)
+        help_menu = menubar.addMenu('&Help')
+        about_action = QAction('About', self)
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
 
@@ -291,40 +288,26 @@ class MainWindow(QMainWindow):
         delete_action = menu.addAction("Delete")
 
         action = menu.exec(self.file_list.mapToGlobal(position))
+        
         if action == download_action:
-            self.download_file()
+            asyncio.create_task(self.download_file())
         elif action == delete_action:
-            # Pass the file info directly instead of the item
-            self.delete_file(file_info=file_info)
+            self.delete_file()
 
     def share_file(self):
-        """Handle file sharing by showing a dialog and queueing the work."""
-        if self._async_operation_in_progress:
-            self.show_warning("Please wait for the current operation to complete.")
-            return
-
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select File to Share",
-            "",
-            "All Files (*.*)"
-        )
-        
-        if not file_path:
-            self.logger.info("File selection cancelled")
-            return
-            
-        # Show immediate feedback
-        self.show_info(f"Processing '{os.path.basename(file_path)}' for sharing in the background.")
-
-        # Queue the file for processing in the background. This is non-blocking.
-        self.file_manager.share_file_in_background(file_path, self.user_id, self.username)
+        """Synchronous slot to start sharing a file."""
+        file_paths, _ = QFileDialog.getOpenFileNames(self, "Select file(s) to share")
+        if file_paths:
+            for file_path in file_paths:
+                self.logger.info(f"UI queueing file for sharing: {file_path}")
+                self.file_manager.share_file_in_background(
+                    file_path, self.user_id, self.username
+                )
+            self.statusBar().showMessage(f"Sharing {len(file_paths)} file(s)...")
 
     @pyqtSlot(dict)
-    def on_file_shared_successfully(self, metadata_dict):
-        """Handle successful file sharing feedback."""
-        self.logger.info(f"Signal received: file shared successfully: {metadata_dict.get('name')}")
-        self.show_info(f"File '{metadata_dict.get('name')}' has been shared successfully!")
+    def on_file_shared_successfully(self, metadata_dict: dict):
+        self.statusBar().showMessage(f"Successfully shared {metadata_dict.get('name')}")
         self.update_file_list()
 
     @pyqtSlot(str)
@@ -502,7 +485,7 @@ class MainWindow(QMainWindow):
             # Close progress dialog
             progress_dialog.close()
             # Restart the update timer
-            self.update_timer.start()
+            self._update_timer.start()
             self._async_operation_in_progress = False
 
     def _update_file_list_direct(self):
@@ -612,68 +595,17 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 self.show_error(f"Error cancelling transfer: {e}")
 
-    @qasync.asyncSlot()
-    async def connect_to_peer(self):
-        """Connect to a peer using the specified address."""
-        if self._async_operation_in_progress:
-            self.logger.info("Peer connection operation already in progress")
-            return
-            
-        self._async_operation_in_progress = True
-        try:
-            # Get peer address from user
-            address, ok = QInputDialog.getText(
-                self, "Connect to Peer", "Enter peer address (host:port):"
-            )
-            
-            if not ok or not address:
-                self._async_operation_in_progress = False
-                return
-                
-            # Parse address
+    def connect_to_peer_dialog(self):
+        """Synchronous slot to trigger a background connection."""
+        text, ok = QInputDialog.getText(self, 'Connect to Peer', 'Enter peer address (host:port):')
+        if ok and text:
             try:
-                host, port_str = address.split(":")
+                host, port_str = text.split(':')
                 port = int(port_str)
-            except ValueError:
-                self.show_error("Invalid address format. Please use host:port")
-                self._async_operation_in_progress = False
-                return
-                
-            # Attempt connection using qasync with proper task management
-            self.logger.info(f"Attempting to connect to peer {address}")
-            
-            # Use a small delay to ensure the UI event loop has time to process
-            await asyncio.sleep(0.01)
-            
-            peer = await self.network_manager.connect_to_peer(host, port)
-            
-            # Add another small delay to allow the connection to stabilize
-            await asyncio.sleep(0.01)
-            
-            if peer:
-                self.show_info(f"Successfully connected to {address}")
-                # Schedule peer message task after the slot returns (qasync-safe)
-                self.network_manager.schedule_peer_message_task(peer)
-                # Defer peer list update to avoid task conflicts
-                asyncio.create_task(self._deferred_update_peer_list())
-            else:
-                self.show_error(f"Failed to connect to {address}")
-            
-        except Exception as e:
-            self.logger.error(f"Error connecting to peer: {e}")
-            self.show_error(f"Error connecting to peer: {str(e)}")
-        finally:
-            self._async_operation_in_progress = False
-
-    async def _deferred_update_peer_list(self):
-        """Update peer list after a delay to avoid task conflicts."""
-        try:
-            # Wait a bit for the connection to fully establish
-            await asyncio.sleep(0.2)
-            # Update peer list in the main thread
-            self.update_peer_list()
-        except Exception as e:
-            self.logger.error(f"Error in deferred peer list update: {e}")
+                self.statusBar().showMessage(f"Connecting to {host}:{port}...")
+                self.dht.connect_to_peer_in_background(host, port)
+            except (ValueError, IndexError):
+                QMessageBox.warning(self, "Invalid Input", "Please enter the address as host:port")
 
     def disconnect_from_peer(self):
         """Disconnect from a selected peer."""
@@ -688,7 +620,7 @@ class MainWindow(QMainWindow):
 
         peer_info = selected_items[0].data(Qt.ItemDataRole.UserRole)
         try:
-            self.network_manager.disconnect_from_peer(peer_info.id)
+            self.dht.disconnect_from_peer(peer_info.id)
             self.show_info(f"Disconnected from peer: {peer_info.address}")
             self.update_peer_list()
         except Exception as e:
@@ -731,123 +663,17 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.logger.error(f"Error updating UI: {e}")
 
-    def update_file_list(self):
-        """Update the file list from the database."""
-        # Don't update if we're already updating to prevent flickering
-        if hasattr(self, '_file_list_updating') and self._file_list_updating:
-            return
-            
-        # Don't update if another async operation is in progress
-        if self._async_operation_in_progress:
-            self.logger.debug("Skipping file list update - async operation in progress")
-            return
-            
-        self._file_list_updating = True
-        self.logger.debug("Starting file list update")
-        self.logger.debug(f"Current file list item count: {self.file_list.topLevelItemCount()}")
-        
-        # Call the async slot directly
-        self._update_file_list_async()
-        self.logger.debug("Called async file list update")
-
     @qasync.asyncSlot()
-    async def _update_file_list_async(self):
-        """Asynchronously update the file list."""
-        if self._async_operation_in_progress:
-            self.logger.info("File list update operation already in progress")
-            return
-            
-        self._async_operation_in_progress = True
+    async def update_file_list(self):
+        """Async update of the file list."""
+        self.file_list.clear()
         try:
             files = await self.file_manager.get_shared_files()
-            self.logger.debug(f"[qasync] Got {len(files)} files from get_shared_files")
-            self._update_file_list_ui(files)
-        except Exception as e:
-            self.logger.error(f"Error in async file list update: {e}", exc_info=True)
-        finally:
-            self._file_list_updating = False
-            self._async_operation_in_progress = False
-
-    def _update_file_list_ui(self, files):
-        """Update the file list widget with file data."""
-        if self._async_operation_in_progress:
-            self.logger.info("File list update operation already in progress")
-            return
-            
-        try:
-            self.logger.debug("Starting UI update in main thread")
-            
-            # Check if the content has actually changed
-            current_files = set()
-            for i in range(self.file_list.topLevelItemCount()):
-                item = self.file_list.topLevelItem(i)
-                file_data = item.data(0, Qt.ItemDataRole.UserRole)
-                if file_data:
-                    current_files.add(file_data.file_id)
-            
-            new_files = {file.file_id for file in files}
-            
-            # Only update if content has changed
-            if current_files == new_files:
-                self.logger.debug("File list content unchanged, skipping UI update")
-                return
-            
-            # Clear and rebuild the list
-            self.file_list.clear()
-            self.logger.debug("Cleared file list for update")
-            
             for file in files:
-                try:
-                    self.logger.debug(f"Processing file: {file.name}")
-                    # Create item
-                    item = QTreeWidgetItem()
-                    self.logger.debug("Created QTreeWidgetItem")
-                    
-                    # Set text for each column
-                    item.setText(0, file.name)
-                    item.setText(1, self.format_size(file.size))
-                    item.setText(2, file.owner_name)
-                    item.setText(3, "Available" if file.is_available else "Unavailable")
-                    self.logger.debug(f"Set text for columns for file: {file.name}")
-                    
-                    # Store metadata
-                    item.setData(0, Qt.ItemDataRole.UserRole, file)
-                    self.logger.debug(f"Stored metadata for file: {file.name}")
-                    
-                    # Add to list
-                    self.file_list.addTopLevelItem(item)
-                    self.logger.debug(f"Added item to list: {file.name}")
-                    
-                    # Verify item was added
-                    index = self.file_list.indexOfTopLevelItem(item)
-                    if index >= 0:
-                        self.logger.debug(f"Verified item added at index {index}")
-                    else:
-                        self.logger.error(f"Failed to add item to list: {file.name}")
-                        
-                except Exception as e:
-                    self.logger.error(f"Error processing file {file.name}: {str(e)}")
-                    continue
-                    
-            # Resize columns
-            for i in range(4):  # We have 4 columns: Name, Size, Owner, Status
-                self.file_list.resizeColumnToContents(i)
-            self.logger.debug("Resized columns")
-            
-            # Log final item count
-            final_count = self.file_list.topLevelItemCount()
-            self.logger.debug(f"Final file list item count: {final_count}")
-            
+                item = QTreeWidgetItem([file.name, str(file.size), file.owner_name or "Unknown"])
+                self.file_list.addTopLevelItem(item)
         except Exception as e:
-            self.logger.error(f"Error in UI update: {str(e)}")
-
-    def format_size(self, size: int) -> str:
-        """Format file size in human-readable format."""
-        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-            if size < 1024:
-                return f"{size:.1f} {unit}"
-            size /= 1024
-        return f"{size:.1f} PB"
+            self.logger.error(f"Failed to update file list: {e}", exc_info=True)
 
     def update_transfer_list(self):
         """Update the transfer list display."""
@@ -859,62 +685,29 @@ class MainWindow(QMainWindow):
             self.transfer_list.addItem(item)
 
     def update_peer_list(self):
-        """Update the peer list display."""
-        if self._async_operation_in_progress:
-            self.logger.info("Peer list update operation already in progress")
-            return
-            
-        try:
-            self.logger.info("Starting peer list update")
-            self.peer_list.clear()
-            
-            # Get connected peers
-            peers = self.network_manager.get_connected_peers()
-            self.logger.info(f"Found {len(peers)} connected peers")
-            
-            for peer in peers:
-                try:
-                    # Get peer info from database
-                    peer_info = self.db_manager.get_peer_sync(peer.id)
-                    self.logger.info(f"Retrieved peer info for {peer.id}: {peer_info}")
-                    
-                    if peer_info:
-                        username = peer_info.get('username', 'Unknown')
-                        self.logger.info(f"Using username from database: {username}")
-                    else:
-                        username = peer.username if hasattr(peer, 'username') else 'Unknown'
-                        self.logger.info(f"Using username from peer object: {username}")
-                    
-                    # Add peer to list
-                    item = QTreeWidgetItem([
-                        username,
-                        peer.address,
-                        str(peer.port),
-                        "Connected"
-                    ])
-                    self.peer_list.addTopLevelItem(item)
-                    self.logger.info(f"Added peer to list: {username} ({peer.id})")
-                except Exception as e:
-                    self.logger.error(f"Error adding peer {peer.id} to list: {e}")
-            
-            # Resize columns to fit content
-            for i in range(self.peer_list.columnCount()):
-                self.peer_list.resizeColumnToContents(i)
-            self.logger.info("Completed peer list update")
-        except Exception as e:
-            self.logger.error(f"Error updating peer list: {e}")
+        """Synchronous update of the peer list."""
+        self.logger.debug("Updating peer list UI")
+        # This part should be synchronous to avoid qasync issues from a QTimer
+        # connected_peers = self.dht.get_connected_peers()
+        # self.peer_list.clear()
+        # for peer in connected_peers:
+        #     item = QTreeWidgetItem([peer.username or "Unknown", peer.address, str(peer.port), "Connected"])
+        #     self.peer_list.addTopLevelItem(item)
 
-    def on_peer_connected(self, peer):
-        """Handle peer connection."""
-        self.logger.info(f"Peer connected: {peer.id}")
-        # Schedule UI update in the main thread
-        QTimer.singleShot(0, self.update_peer_list)
+    @qasync.asyncSlot()
+    async def on_file_metadata_received(self, metadata: FileMetadata, peer: Peer):
+        self.logger.info(f"Received metadata for {metadata.name} from {peer.id}, updating file list.")
+        self.update_file_list()
 
-    def on_peer_disconnected(self, peer):
-        """Handle peer disconnection."""
-        self.logger.info(f"Peer disconnected: {peer.id}")
-        # Schedule UI update in the main thread
-        QTimer.singleShot(0, self.update_peer_list)
+    @qasync.asyncSlot()
+    async def on_peer_connected(self, peer: Peer):
+        self.logger.info(f"UI notified of peer connection: {peer.id}")
+        self.update_peer_list()
+
+    @qasync.asyncSlot()
+    async def on_peer_disconnected(self, peer: Peer):
+        self.logger.info(f"UI notified of peer disconnect: {peer.id}")
+        self.update_peer_list()
 
     def on_peer_updated(self, peer):
         """Handle peer update."""
@@ -933,7 +726,7 @@ class MainWindow(QMainWindow):
             self.file_manager.cancel_all_transfers()
             
             # Disconnect from all peers
-            self.network_manager.disconnect_all_peers()
+            self.dht.disconnect_all_peers()
             
             # Close database connection
             self.db_manager.close()
@@ -993,8 +786,14 @@ class MainWindow(QMainWindow):
         # Implementation of on_transfer_completed method
         pass
 
-    def on_file_metadata_received(self, metadata):
-        """Handle received file metadata."""
-        self.logger.info(f"Received file metadata: {metadata.name}")
-        # Schedule UI update in the main thread
-        QTimer.singleShot(0, self.update_file_list) 
+    def statusBar(self) -> QStatusBar:
+        # Override to provide correct type hint
+        status_bar = super().statusBar()
+        assert status_bar is not None
+        return status_bar
+        
+    def menuBar(self) -> QMenu:
+        # Override to provide correct type hint
+        menu_bar = super().menuBar()
+        assert menu_bar is not None
+        return menu_bar 
