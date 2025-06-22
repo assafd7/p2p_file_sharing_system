@@ -51,30 +51,17 @@ class FileManager:
         return sha256_hash.hexdigest()
     
     async def add_file(self, file_path: str, owner_id: str, owner_name: str) -> Optional[FileMetadata]:
-        """Add a file to the shared files."""
-        self.logger.info(f"Starting to add file: {file_path}")
+        """Adds a file to the system for sharing (without broadcasting)."""
         try:
-            # Validate file
-            if not os.path.exists(file_path):
-                self.logger.error(f"File does not exist: {file_path}")
-                raise FileNotFoundError(f"File not found: {file_path}")
+            self.logger.info(f"Adding file: {file_path}")
             
-            # Create metadata
+            # Calculate hash and create metadata
             self.logger.debug("Creating file metadata...")
-            metadata = await self.metadata_manager.create_metadata(
-                Path(file_path),
-                owner_id,
-                owner_name
-            )
-            self.logger.debug(f"Metadata created with ID: {metadata.file_id}")
+            metadata = await self.create_file_metadata(file_path, owner_id)
+            metadata.owner_name = owner_name # Set the owner's name
+            self.logger.debug(f"Metadata created: {metadata}")
             
-            # Copy file to storage
-            self.logger.debug("Copying file to storage...")
-            storage_path = self.storage_dir / f"{metadata.file_id}_{metadata.name}"
-            shutil.copy2(file_path, storage_path)
-            self.logger.debug(f"File copied to: {storage_path}")
-            
-            # Store metadata in database
+            # Store metadata in the database
             self.logger.debug("Storing metadata in database...")
             await self.db_manager.store_file_metadata(metadata)
             self.logger.debug("Metadata stored in database successfully")
@@ -84,13 +71,9 @@ class FileManager:
             await self.metadata_manager.add_metadata(metadata)
             self.logger.debug("Metadata stored in memory successfully")
             
-            # Broadcast metadata if DHT is available
-            if self.dht:
-                self.logger.debug("Broadcasting metadata to network...")
-                await self.dht.broadcast_file_metadata(metadata)
-                self.logger.debug("Metadata broadcast complete")
+            # NOTE: We do NOT broadcast here. The UI will schedule the broadcast.
             
-            self.logger.info(f"File added successfully: {metadata.name}")
+            self.logger.info(f"File added locally: {metadata.name}")
             return metadata
             
         except Exception as e:

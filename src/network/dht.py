@@ -442,6 +442,19 @@ class DHT:
         except Exception as e:
             self.logger.error(f"Error scheduling peer message task for {peer.id}: {e}")
 
+    def schedule_metadata_broadcast(self, metadata: 'FileMetadata'):
+        """Schedules a file metadata broadcast to run in the background (qasync-safe)."""
+        try:
+            # Create a task to run the broadcast coroutine
+            # This is safe because it's not awaited directly in a UI slot
+            asyncio.create_task(
+                self.broadcast_file_metadata(metadata),
+                name=f"broadcast_{metadata.file_id}"
+            )
+            self.logger.info(f"Scheduled broadcast for file: {metadata.name}")
+        except Exception as e:
+            self.logger.error(f"Error scheduling metadata broadcast: {e}", exc_info=True)
+
     def _cleanup_peer_task(self, peer_id: str, task: asyncio.Task):
         """Clean up peer task when it's done."""
         try:

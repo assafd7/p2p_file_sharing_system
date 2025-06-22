@@ -290,16 +290,13 @@ class MainWindow(QMainWindow):
             # Pass the file info directly instead of the item
             self.delete_file(file_info=file_info)
 
-    @qasync.asyncSlot()
-    async def share_file(self):
-        """Handle file sharing."""
+    def share_file(self):
+        """Handle file sharing by showing a dialog and then scheduling the async sharing task."""
         if self._async_operation_in_progress:
-            self.logger.info("File sharing operation already in progress")
+            self.logger.info("An async operation is already in progress.")
+            self.show_warning("Please wait for the current operation to complete.")
             return
-            
-        self._async_operation_in_progress = True
-        self.logger.info("Starting file sharing process")
-        
+
         # Get file path from user
         file_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -310,20 +307,29 @@ class MainWindow(QMainWindow):
         
         if not file_path:
             self.logger.info("File selection cancelled")
-            self._async_operation_in_progress = False
             return
             
-        self.logger.info(f"Selected file: {file_path}")
+        # Schedule the async part of the file sharing
+        self._share_file_async(file_path)
+
+    @qasync.asyncSlot()
+    async def _share_file_async(self, file_path: str):
+        """Asynchronously add a file and broadcast its metadata."""
+        if self._async_operation_in_progress:
+            self.logger.info("File sharing operation already in progress")
+            return
+            
+        self._async_operation_in_progress = True
+        self.logger.info(f"Starting async file sharing for: {file_path}")
         
-        # Show progress dialog
         progress = QProgressDialog("Adding file...", "Cancel", 0, 0, self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setWindowTitle("Adding File")
+        progress.setWindowTitle("Sharing File")
         progress.setMinimumDuration(0)
         progress.show()
         
         try:
-            # Add file using qasync
+            # Add file locally (hashes, saves to DB, etc., but doesn't broadcast)
             metadata = await self.file_manager.add_file(
                 file_path,
                 self.user_id,
@@ -331,30 +337,32 @@ class MainWindow(QMainWindow):
             )
             
             if metadata:
-                self.logger.info(f"File added successfully: {metadata.name}")
-                self.update_file_list()
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    f"File {metadata.name} has been shared successfully!"
-                )
+                self.logger.info(f"File added locally: {metadata.name}")
+
+                # Now, schedule the network broadcast safely
+                if self.network_manager:
+                    self.network_manager.schedule_metadata_broadcast(metadata)
+
+                # Defer UI updates to prevent conflicts
+                asyncio.create_task(self._deferred_update_file_list())
+                self.show_info(f"File '{metadata.name}' has been shared successfully!")
             else:
                 self.logger.error("Failed to add file: No metadata returned")
-                QMessageBox.critical(
-                    self,
-                    "Error",
-                    "Failed to share file. Please try again."
-                )
+                self.show_error("Failed to share file. Please see logs for details.")
         except Exception as e:
-            self.logger.error(f"Error adding file: {e}")
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Failed to share file: {str(e)}"
-            )
+            self.logger.error(f"Error adding file: {e}", exc_info=True)
+            self.show_error(f"Failed to share file: {str(e)}")
         finally:
             progress.close()
             self._async_operation_in_progress = False
+
+    async def _deferred_update_file_list(self):
+        """Update file list after a delay to avoid task conflicts."""
+        try:
+            await asyncio.sleep(0.1)
+            self.update_file_list()
+        except Exception as e:
+            self.logger.error(f"Error in deferred file list update: {e}", exc_info=True)
 
     @qasync.asyncSlot()
     async def download_file(self):
