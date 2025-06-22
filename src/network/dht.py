@@ -68,7 +68,7 @@ class DHT:
         self.on_chunk_response: Optional[Callable[[str, int, bytes, Peer], Awaitable[None]]] = None
 
         self.message_handlers = {
-            MessageType.PEER_LIST: self._handle_peer_list,
+            MessageType.PEER_LIST: self._handle_peer_list_v1,
             MessageType.GOODBYE: self._handle_goodbye,
             MessageType.FILE_METADATA: self._handle_file_metadata,
             MessageType.CHUNK_REQUEST: self._handle_chunk_request,
@@ -187,7 +187,7 @@ class DHT:
     def _register_message_handlers(self):
         """Register message handlers for the DHT."""
         self.message_handlers = {
-            MessageType.PEER_LIST: self._handle_peer_list,
+            MessageType.PEER_LIST: self._handle_peer_list_v1,
             MessageType.GOODBYE: self._handle_goodbye,
             MessageType.FILE_METADATA: self._handle_file_metadata,
             MessageType.CHUNK_REQUEST: self._handle_chunk_request,
@@ -196,7 +196,7 @@ class DHT:
         }
         self.logger.debug("Registered message handlers")
             
-    async def _handle_peer_list(self, message: Message, peer: Peer):
+    async def _handle_peer_list_v1(self, message: Message, peer: Peer):
         for p_info in message.payload.get('peers', []):
             if p_info.get('id') != self.node_id:
                 await self.connect_to_peer(p_info['host'], p_info['port'])
@@ -229,6 +229,7 @@ class DHT:
                 writer.close(); await writer.wait_closed(); return
 
             peer = Peer(reader, writer, peer_id)
+            peer.is_connected = True  # Mark incoming connection as connected
             self.peers[peer_id] = peer
             self.logger.info(f"[DHT] Added peer {peer_id} to self.peers. Total peers: {len(self.peers)}")
             self.add_node(PeerInfo(id=peer.id, address=peer.address, port=peer.port, last_seen=datetime.now()))
@@ -241,33 +242,6 @@ class DHT:
             except Exception as e:
                 self.logger.error(f"[DHT] Exception while waiting for connection to close: {e}")
 
-    async def handle_peer_list(self, message: Message, peer: Peer):
-        """Handle peer list messages."""
-        try:
-            peers = message.payload.get('peers', [])
-            self.logger.debug(f"Received peer list with {len(peers)} peers from {peer.id}")
-            
-            # Process each peer in the list
-            for peer_info in peers:
-                try:
-                    # Skip if it's our own peer info
-                    if peer_info['id'] == self.node_id:
-                        continue
-                        
-                    # Skip if we already know this peer
-                    if peer_info['id'] in self.peers:
-                        continue
-                        
-                    # Connect to the new peer
-                    await self.connect_to_peer(peer_info['host'], peer_info['port'])
-                    
-                except Exception as e:
-                    self.logger.error(f"Error processing peer {peer_info.get('id')}: {e}")
-                    continue
-                    
-        except Exception as e:
-            self.logger.error(f"Error handling peer list: {e}")
-            
     def _start_peer_message_loop(self, peer: Peer):
         """Creates and tracks the message handling task for a peer."""
         if peer.id in self._peer_tasks:
@@ -613,151 +587,6 @@ class DHT:
                         await peer.send_message(message)
                 except Exception as e:
                     self.logger.error(f"Error sending peer list to {peer.host}:{peer.port}: {e}")
-
-    async def handle_peer_list(self, message: Message):
-        """Handle incoming peer list message."""
-        try:
-            peers_data = message.payload.get('peers', [])
-            chunk_index = message.payload.get('chunk_index', 0)
-            total_chunks = message.payload.get('total_chunks', 1)
-            
-            # Store chunk in temporary storage
-            if not hasattr(self, '_peer_list_chunks'):
-                self._peer_list_chunks = {}
-            self._peer_list_chunks[chunk_index] = peers_data
-            
-            # If we have all chunks, process them
-            if len(self._peer_list_chunks) == total_chunks:
-                # Combine all chunks
-                all_peers = []
-                for i in range(total_chunks):
-                    all_peers.extend(self._peer_list_chunks[i])
-                    
-                # Clear temporary storage
-                self._peer_list_chunks = {}
-                
-                # Process combined peer list
-                for peer_data in all_peers:
-                    peer_id = peer_data.get('peer_id')
-                    host = peer_data.get('host')
-                    port = peer_data.get('port')
-                    
-                    if not all([peer_id, host, port]):
-                        continue
-                        
-                    # Skip if it's our own peer info
-                    if peer_id == self.local_peer.peer_id:
-                        continue
-                        
-                    # Skip if we already know this peer
-                    if peer_id in self.peers:
-                        continue
-                        
-                    # Try to connect to the new peer
-                    try:
-                        await self.connect_to_peer(host, port)
-                    except Exception as e:
-                        self.logger.error(f"Error connecting to peer {host}:{port}: {e}")
-                        
-        except Exception as e:
-            self.logger.error(f"Error handling peer list: {e}")
-
-    async def _handle_peer_messages(self, peer: Peer):
-        """Handle messages from a peer in a qasync-compatible way."""
-        try:
-            # Read one message at a time without blocking the event loop
-            message = await peer.read_message()
-            if message:
-                # Process message
-                if message.type in self.message_handlers:
-                    try:
-                        await self.message_handlers[message.type](message, peer)
-                    except Exception as e:
-                        self.logger.error(f"Error handling message: {e}")
-                else:
-                    self.logger.warning(f"No handler for message type: {message.type}")
-                    
-        except Exception as e:
-            self.logger.error(f"Error in message handling: {e}")
-        finally:
-            # Don't call disconnect here as it might cause recursion
-            # The peer will handle its own disconnection
-            pass
-
-    async def _handle_peer_disconnect(self, peer: Peer):
-        """Handle peer disconnection."""
-        try:
-            if peer.id in self.peers:
-                # Close the connection
-                await peer.close()
-                
-                # Remove from peers list
-                del self.peers[peer.id]
-                
-                # Notify UI
-                if hasattr(self, 'on_peer_disconnected'):
-                    self.on_peer_disconnected(peer)
-                    
-                self.logger.info(f"Peer disconnected: {peer.id}")
-        except Exception as e:
-            self.logger.error(f"Error handling peer disconnect: {e}")
-
-    async def send_message(self, message: Message, peer: Peer):
-        """Send a message to a peer."""
-        try:
-            if not peer.writer or peer.writer.is_closing():
-                self.logger.error(f"Cannot send message to peer {peer.id}: connection is closed")
-                raise ConnectionError("Peer connection is closed")
-                
-            # Serialize message
-            self.logger.debug(f"Preparing to send message to peer {peer.id}: type={message.type}")
-            data = message.serialize()
-            
-            # Send message length
-            length = len(data)
-            self.logger.debug(f"Sending message length {length} to peer {peer.id}")
-            peer.writer.write(length.to_bytes(4, 'big'))
-            
-            # Send message data
-            self.logger.debug(f"Sending message data to peer {peer.id}")
-            peer.writer.write(data)
-            await peer.writer.drain()
-            self.logger.debug(f"Successfully sent message to peer {peer.id}")
-            
-        except Exception as e:
-            self.logger.error(f"Error sending message to peer {peer.id}: {e}")
-            await self._handle_peer_disconnect(peer)
-            raise
-
-    async def broadcast_file_metadata(self, metadata: FileMetadata):
-        """Broadcasts file metadata to all connected peers."""
-        self.logger.info(f"Broadcasting metadata for {metadata.name} to all peers.")
-        try:
-            self.logger.info(f"Starting broadcast of file metadata: {metadata.name}")
-            
-            # Create the message
-            message = Message(
-                type=MessageType.FILE_METADATA,
-                sender_id=self.node_id,
-                payload=metadata.to_dict()
-            )
-            self.logger.debug(f"Created file metadata message for {metadata.name}")
-            
-            # Send to all connected peers
-            connected_peers = self.get_connected_peers()
-            self.logger.debug(f"Broadcasting to {len(connected_peers)} connected peers")
-            
-            for peer in connected_peers:
-                try:
-                    self.logger.debug(f"Sending file metadata to peer {peer.id}")
-                    await self.send_message(message, peer)
-                    self.logger.debug(f"Successfully sent file metadata to peer {peer.id}")
-                except Exception as e:
-                    self.logger.error(f"Error sending file metadata to peer {peer.id}: {e}")
-                    
-        except Exception as e:
-            self.logger.error(f"Error broadcasting file metadata: {e}")
-            raise
 
     async def _handle_file_metadata(self, message: Message, peer: Peer):
         """Handle incoming file metadata"""
