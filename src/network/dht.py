@@ -1,7 +1,7 @@
 import hashlib
 import time
 import asyncio
-from typing import Dict, List, Set, Optional, Tuple, Callable
+from typing import Dict, List, Set, Optional, Tuple, Callable, Awaitable
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
@@ -146,19 +146,6 @@ class DHT:
         if self._running:
             self._running = False
             
-            # Cancel all peer message handling tasks
-            for peer_id, task in list(self._peer_tasks.items()):
-                if not task.done():
-                    self.logger.debug(f"Cancelling peer task for {peer_id}")
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass  # Expected when cancelling
-            
-            # Clear peer tasks
-            self._peer_tasks.clear()
-            
             # Disconnect from all peers
             for peer_id in list(self.peers.keys()):
                 await self.remove_peer(peer_id)
@@ -213,49 +200,24 @@ class DHT:
         
     async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """Handle new peer connection."""
-        try:
-            # Get peer address
-            peer_addr = writer.get_extra_info('peername')
-            peer_id = f"{peer_addr[0]}:{peer_addr[1]}"
-            
-            self.logger.info(f"New connection from {peer_id}")
-            
-            # Create peer object
+        peer_address, peer_port = writer.get_extra_info('peername')
+        peer_id = f"{peer_address}:{peer_port}"
+
+        if peer_id == self.node_id:
+            writer.close(); await writer.wait_closed(); return
+
+        async with self._connection_semaphore:
+            if peer_id in self.peers:
+                writer.close(); await writer.wait_closed(); return
+
             peer = Peer(reader, writer, peer_id)
             self.peers[peer_id] = peer
+            self.add_node(PeerInfo(id=peer.id, address=peer.address, port=peer.port, last_seen=datetime.now()))
             
-            # Send our username
-            try:
-                self.logger.info(f"Sending username '{self.username}' to peer {peer_id}")
-                await self.send_message(
-                    Message(
-                        type=MessageType.USER_INFO,
-                        sender_id=self.node_id,
-                        payload={'username': self.username}
-                    ),
-                    peer
-                )
-                self.logger.info(f"Successfully sent username to peer {peer_id}")
-            except Exception as e:
-                self.logger.error(f"Error sending initial message to peer {peer_id}: {e}")
-                await self._handle_peer_disconnect(peer)
-                return
-            
-            # Notify UI
-            if hasattr(self, 'on_peer_connected'):
-                self.logger.info(f"Notifying UI of new peer connection: {peer_id}")
-                self.on_peer_connected(peer)
-            
-            # Schedule peer message task after the connection handler returns (qasync-safe)
-            self.schedule_peer_message_task(peer)
-            
-        except Exception as e:
-            self.logger.error(f"Error handling new connection: {e}")
-            try:
-                writer.close()
-                await writer.wait_closed()
-            except:
-                pass
+            if self.on_peer_connected is not None:
+                await self.on_peer_connected(peer)
+
+            asyncio.create_task(self._handle_peer_messages_loop(peer))
 
     async def handle_peer_list(self, message: Message, peer: Peer):
         """Handle peer list messages."""
@@ -311,58 +273,25 @@ class DHT:
 
     async def connect_to_peer(self, host: str, port: int) -> Optional[Peer]:
         """Connect to a peer without starting background tasks (qasync-safe)."""
-        async with self._connection_semaphore:  # Ensure only one connection at a time
-            try:
-                # Create connection with timeout
-                self.logger.info(f"Attempting to connect to {host}:{port}")
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(host, port),
-                    timeout=10.0  # 10 second timeout
-                )
-                
-                # Get peer address
-                peer_addr = writer.get_extra_info('peername')
-                peer_id = f"{peer_addr[0]}:{peer_addr[1]}"
-                
-                self.logger.info(f"Connected to peer {peer_id}")
-                
-                # Create peer object
+        peer_id = f"{host}:{port}"
+        if peer_id == self.node_id or peer_id in self.peers:
+            return self.peers.get(peer_id)
+
+        try:
+            async with self._connection_semaphore:
+                reader, writer = await asyncio.open_connection(host, port)
                 peer = Peer(reader, writer, peer_id)
                 self.peers[peer_id] = peer
+                self.add_node(PeerInfo(id=peer.id, address=peer.address, port=peer.port, last_seen=datetime.now()))
                 
-                # Send our username
-                try:
-                    self.logger.info(f"Sending username '{self.username}' to peer {peer_id}")
-                    await self.send_message(
-                        Message(
-                            type=MessageType.USER_INFO,
-                            sender_id=self.node_id,
-                            payload={'username': self.username}
-                        ),
-                        peer
-                    )
-                    self.logger.info(f"Successfully sent username to peer {peer_id}")
-                except Exception as e:
-                    self.logger.error(f"Error sending initial message to peer {peer_id}: {e}")
-                    await self._handle_peer_disconnect(peer)
-                    return None
+                if self.on_peer_connected is not None:
+                    await self.on_peer_connected(peer)
                 
-                # Notify UI
-                if hasattr(self, 'on_peer_connected'):
-                    self.logger.info(f"Notifying UI of new peer connection: {peer_id}")
-                    self.on_peer_connected(peer)
-                
-                # DO NOT start message handling task here - let the UI do it after the slot returns
-                self.logger.info(f"Peer {peer_id} connected successfully, ready for message task start")
-                    
+                asyncio.create_task(self._handle_peer_messages_loop(peer))
                 return peer
-                
-            except asyncio.TimeoutError:
-                self.logger.error(f"Connection timeout to {host}:{port}")
-                return None
-            except Exception as e:
-                self.logger.error(f"Error connecting to peer: {e}")
-                return None
+        except Exception as e:
+            self.logger.error(f"Failed to connect to {peer_id}: {e}")
+            return None
 
     def schedule_peer_message_task(self, peer: Peer):
         """Schedule a peer message handling task to start after the current slot returns (qasync-safe)."""
@@ -799,17 +728,6 @@ class DHT:
         """Handle peer disconnection."""
         try:
             if peer.id in self.peers:
-                # Cancel the peer message handling task
-                if peer.id in self._peer_tasks:
-                    task = self._peer_tasks[peer.id]
-                    if not task.done():
-                        self.logger.debug(f"Cancelling peer task for {peer.id}")
-                        task.cancel()
-                        try:
-                            await task
-                        except asyncio.CancelledError:
-                            pass  # Expected when cancelling
-                
                 # Close the connection
                 await peer.close()
                 

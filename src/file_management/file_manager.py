@@ -136,7 +136,8 @@ class FileManager(QObject):
             metadata = await self._add_file_locally(file_path, owner_id, owner_name)
             
             if self.dht and metadata:
-                self.dht.schedule_metadata_broadcast(metadata)
+                loop = asyncio.get_running_loop()
+                loop.call_soon(self.dht.schedule_metadata_broadcast, metadata)
 
             if metadata:
                 self.file_added_signal.emit(metadata.to_dict())
