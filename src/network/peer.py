@@ -72,6 +72,8 @@ class Peer:
         self.processing_task = None
         self._lock = asyncio.Lock()
         self.message_handlers: Dict[MessageType, Callable[[Message], Awaitable[None]]] = {}
+        self.hello_sent = False
+        self.hello_received = False
 
     @property
     def address(self) -> str:
@@ -129,10 +131,12 @@ class Peer:
                 # Optionally, perform handshake or send a ping here
                 self.is_connected = True
                 self.logger.info(f"Connected to peer {self.address}:{self.port}")
-                # Send HELLO message immediately after connecting
-                hello_payload = {"username": self.username} if self.username else {}
-                hello_msg = Message.create(MessageType.HELLO, self.id, hello_payload)
-                await self.send_message(hello_msg)
+                # Send HELLO message immediately after connecting, only once
+                if not self.hello_sent:
+                    hello_payload = {"username": self.username} if self.username else {}
+                    hello_msg = Message.create(MessageType.HELLO, self.id, hello_payload)
+                    await self.send_message(hello_msg)
+                    self.hello_sent = True
                 # Start heartbeat after sending HELLO
                 if not self.heartbeat_task:
                     self.heartbeat_task = asyncio.create_task(self._heartbeat())
@@ -531,6 +535,13 @@ class Peer:
 
     async def _handle_hello(self, message):
         self.logger.info(f"Received HELLO from peer {self.id}")
+        if not self.hello_received:
+            self.hello_received = True
+            # Only send HELLO back if we haven't sent one yet
+            if not self.hello_sent:
+                hello_msg = Message.create(MessageType.HELLO, self.id, {"username": self.username})
+                await self.send_message(hello_msg)
+                self.hello_sent = True
         # Start heartbeat after receiving HELLO
         if not self.heartbeat_task:
             self.heartbeat_task = asyncio.create_task(self._heartbeat()) 

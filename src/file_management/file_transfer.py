@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Callable, Set
 from datetime import datetime
 import hashlib
+from PyQt6.QtCore import QTimer
 
 from .file_metadata import FileMetadata
 from ..network.peer import Peer
@@ -49,7 +50,7 @@ class FileTransfer:
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
         
         if self.is_downloader:
-            self._task = asyncio.create_task(self._download_loop())
+            QTimer.singleShot(0, lambda: setattr(self, '_task', asyncio.create_task(self._download_loop())))
         else:
             # For uploaders, starting just means it's ready to serve chunks.
             self.logger.info("Uploader is active and waiting for chunk requests.")

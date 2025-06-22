@@ -639,7 +639,8 @@ class MainWindow(QMainWindow):
             await asyncio.sleep(0.01)
             if peer and peer.is_connected:
                 self.show_info(f"Successfully connected to {address}")
-                asyncio.create_task(self._deferred_update_peer_list())
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, lambda: asyncio.create_task(self._deferred_update_peer_list()))
             else:
                 self.show_error(f"Failed to connect to {address}")
         except Exception as e:
