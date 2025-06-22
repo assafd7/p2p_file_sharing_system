@@ -74,6 +74,7 @@ class DHT:
             MessageType.CHUNK_REQUEST: self._handle_chunk_request,
             MessageType.CHUNK_RESPONSE: self._handle_chunk_response,
             MessageType.FIND_NODE: self._handle_find_node,
+            MessageType.HELLO: self._handle_hello,
         }
         
     @property
@@ -193,6 +194,7 @@ class DHT:
             MessageType.CHUNK_REQUEST: self._handle_chunk_request,
             MessageType.CHUNK_RESPONSE: self._handle_chunk_response,
             MessageType.FIND_NODE: self._handle_find_node,
+            MessageType.HELLO: self._handle_hello,
         }
         self.logger.debug("Registered message handlers")
             
@@ -743,3 +745,10 @@ class DHT:
         }
         response = Message(type=MessageType.PEER_LIST, payload=response_payload)
         await peer.send_message(response)
+
+    async def _handle_hello(self, message, peer):
+        self.logger.info(f"Received HELLO from {peer.id}")
+        # Optionally update peer info/state here
+        # Send HELLO back if this is the first HELLO from this peer
+        hello_msg = Message.create(MessageType.HELLO, self.node_id, {"username": self.username})
+        await peer.send_message(hello_msg)
