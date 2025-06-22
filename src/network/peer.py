@@ -253,11 +253,11 @@ class Peer:
             return None
             
         try:
-            # Step 1: Read length prefix with shorter timeout
+            # Step 1: Read length prefix with longer timeout
             self.logger.debug("Step 1: Reading message length prefix")
             length_data = await asyncio.wait_for(
                 self.reader.read(4),
-                timeout=0.5  # Reduced timeout to prevent blocking
+                timeout=self.read_timeout  # Use longer timeout for normal operation
             )
             
             if not length_data:
@@ -312,7 +312,7 @@ class Peer:
                 return None
                 
         except asyncio.TimeoutError:
-            self.logger.debug(f"Timeout reading message length after 0.5 seconds")
+            self.logger.debug(f"Timeout reading message length after {self.read_timeout} seconds")
             return None
         except ConnectionResetError:
             self.logger.error("Connection reset while reading message")
