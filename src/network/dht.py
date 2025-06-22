@@ -9,6 +9,7 @@ from .protocol import Message, MessageType
 from .peer import Peer, PeerInfo
 from src.database.db_manager import DatabaseManager
 from src.file_management.file_metadata import FileMetadata
+from PyQt6.QtCore import QTimer
 
 class DHTError(Exception):
     """Base exception class for DHT-related errors."""
@@ -262,9 +263,11 @@ class DHT:
         """Creates and tracks the message handling task for a peer."""
         if peer.id in self._peer_tasks:
             return # Task already running
-        task = asyncio.create_task(self._handle_peer_messages_loop(peer))
-        self._peer_tasks[peer.id] = task
-        task.add_done_callback(lambda t: self._peer_tasks.pop(peer.id, None))
+        def schedule_task():
+            task = asyncio.create_task(self._handle_peer_messages_loop(peer))
+            self._peer_tasks[peer.id] = task
+            task.add_done_callback(lambda t: self._peer_tasks.pop(peer.id, None))
+        QTimer.singleShot(0, schedule_task)
 
     async def connect_to_peer(self, host: str, port: int) -> Optional[Peer]:
         """Connect to a peer without starting background tasks (qasync-safe)."""
@@ -295,10 +298,11 @@ class DHT:
                 if not existing_task.done():
                     self.logger.debug(f"Peer task for {peer_id} already exists and running")
                     return
-            # Schedule the task to start after the current slot returns
-            loop = asyncio.get_event_loop()
-            loop.call_soon(asyncio.create_task, self._handle_peer_messages_loop(peer))
-            self.logger.debug(f"Scheduled peer message task for {peer_id}")
+            def schedule_task():
+                loop = asyncio.get_event_loop()
+                loop.create_task(self._handle_peer_messages_loop(peer))
+                self.logger.debug(f"Scheduled peer message task for {peer_id}")
+            QTimer.singleShot(0, schedule_task)
         except Exception as e:
             self.logger.error(f"Error scheduling peer message task for {peer.id}: {e}")
 
@@ -308,8 +312,10 @@ class DHT:
         iteration of the event loop, avoiding qasync conflicts.
         """
         self.logger.info(f"Scheduled broadcast for file: {metadata.name}")
-        loop = asyncio.get_running_loop()
-        loop.call_soon(asyncio.create_task, self.broadcast_file_metadata(metadata))
+        def schedule_task():
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.broadcast_file_metadata(metadata))
+        QTimer.singleShot(0, schedule_task)
 
     def _cleanup_peer_task(self, peer_id: str, task: asyncio.Task):
         """Clean up peer task when it's done."""

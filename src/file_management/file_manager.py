@@ -16,7 +16,7 @@ from src.database.db_manager import DatabaseManager
 from src.file_management.file_transfer import FileTransfer
 from src.file_management.file_metadata import FileMetadata, FileMetadataManager, FileChunk
 from src.network.dht import DHT
-from PyQt6.QtCore import QObject, pyqtSignal, QThread
+from PyQt6.QtCore import QObject, pyqtSignal, QThread, QTimer
 
 class FileManagerError(Exception):
     """Exception raised for file manager errors."""
@@ -59,13 +59,15 @@ class FileProcessingWorker(QThread):
                 self.logger.error(f"Error in worker thread loop: {e}", exc_info=True)
         self.logger.info("File processing worker thread stopped.")
 
-    def _on_job_done(self, future: asyncio.Future):
+    def _on_job_done(self, future):
         """Callback executed when a submitted coroutine is done."""
         try:
             future.result() # This will raise any exception that occurred in the coroutine
         except Exception as e:
             self.logger.error(f"Async file processing job failed: {e}", exc_info=True)
-            self.file_add_failed_signal.emit(f"Failed to share file: {str(e)}")
+            # Emit the signal from the file manager if it exists
+            if hasattr(self._file_manager, 'file_add_failed_signal'):
+                self._file_manager.file_add_failed_signal.emit(f"Failed to share file: {str(e)}")
 
     def stop(self):
         self._is_running = False
@@ -135,9 +137,11 @@ class FileManager(QObject):
         try:
             metadata = await self._add_file_locally(file_path, owner_id, owner_name)
             
-            if self.dht and metadata:
-                loop = asyncio.get_running_loop()
-                loop.call_soon(asyncio.create_task, self.dht.broadcast_file_metadata(metadata))
+            if self.dht is not None and metadata is not None:
+                def schedule_task():
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self.dht.broadcast_file_metadata(metadata))
+                QTimer.singleShot(0, schedule_task)
 
             if metadata:
                 self.file_added_signal.emit(metadata.to_dict())
