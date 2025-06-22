@@ -122,8 +122,8 @@ class MainWindow(QMainWindow):
         # Initial UI update
         QTimer.singleShot(0, self.update_ui)
 
-        # Connect the signal to the scheduling function
-        self.peer_connected_signal.connect(self.network_manager.schedule_peer_message_task)
+        # Connect the signal to a lambda that defers scheduling
+        self.peer_connected_signal.connect(lambda peer: QTimer.singleShot(0, lambda: self.network_manager.schedule_peer_message_task(peer)))
 
     def setup_files_tab(self):
         """Setup the files tab with file list and controls."""
@@ -625,19 +625,18 @@ class MainWindow(QMainWindow):
             return
             
         self._async_operation_in_progress = True
+        peer = None
         try:
             address, ok = QInputDialog.getText(
                 self, "Connect to Peer", "Enter peer address (host:port):"
             )
             if not ok or not address:
-                self._async_operation_in_progress = False
                 return
             try:
                 host, port_str = address.split(":")
                 port = int(port_str)
             except ValueError:
                 self.show_error("Invalid address format. Please use host:port")
-                self._async_operation_in_progress = False
                 return
             self.logger.info(f"Attempting to connect to peer {address}")
             await asyncio.sleep(0.01)
@@ -645,7 +644,6 @@ class MainWindow(QMainWindow):
             await asyncio.sleep(0.01)
             if peer:
                 self.show_info(f"Successfully connected to {address}")
-                self.peer_connected_signal.emit(peer)  # Emit signal here
                 asyncio.create_task(self._deferred_update_peer_list())
             else:
                 self.show_error(f"Failed to connect to {address}")
@@ -654,6 +652,8 @@ class MainWindow(QMainWindow):
             self.show_error(f"Error connecting to peer: {str(e)}")
         finally:
             self._async_operation_in_progress = False
+            if peer:
+                self.peer_connected_signal.emit(peer)  # Emit signal only after slot is fully done
 
     async def _deferred_update_peer_list(self):
         """Update peer list after a delay to avoid task conflicts."""
