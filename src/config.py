@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 # Network settings
-DEFAULT_HOST = "127.0.0.1"
+DEFAULT_HOST = "0.0.0.0"  # Listen on all interfaces for network connections
 DEFAULT_PORT = 8000
 BOOTSTRAP_NODES = []
 
