@@ -194,32 +194,19 @@ class Peer:
             return False
             
         try:
-            # Log message before sending
-            self.logger.debug(f"Sending message type {message.type} to {self.address}:{self.port}")
-            
             # Serialize message
-            try:
-                data = message.serialize()
-                self.logger.debug(f"Serialized message size: {len(data)} bytes")
-            except Exception as e:
-                self.logger.error(f"Error serializing message: {e}")
-                return False
-            
-            # Send data in chunks
-            chunk_size = 8192  # 8KB chunks
-            total_sent = 0
-            
-            while total_sent < len(data):
-                chunk = data[total_sent:total_sent + chunk_size]
-                try:
-                    self.writer.write(chunk)
-                    await self.writer.drain()
-                    total_sent += len(chunk)
-                    self.logger.debug(f"Sent {total_sent}/{len(data)} bytes")
-                except Exception as e:
-                    self.logger.error(f"Error sending chunk: {e}")
-                    return False
-            
+            data = message.serialize()
+            self.logger.debug(f"Serialized message size: {len(data)} bytes")
+
+            # Send length prefix
+            length_prefix = len(data).to_bytes(4, 'big')
+            self.writer.write(length_prefix)
+            await self.writer.drain()
+
+            # Send message data
+            self.writer.write(data)
+            await self.writer.drain()
+
             self.logger.debug(f"Successfully sent message of size {len(data)} bytes")
             return True
             
