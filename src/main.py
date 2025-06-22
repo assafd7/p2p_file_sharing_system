@@ -58,7 +58,7 @@ class P2PFileSharingApp:
                 self.logger.debug(f"Directory {directory} is ready for use")
             except Exception as e:
                 self.logger.error(f"Error creating directory {directory}: {e}")
-            raise
+                raise  # Re-raise the exception to stop initialization
     
     def get_local_ip(self) -> str:
         """Get the local IP address."""
