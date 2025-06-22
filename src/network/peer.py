@@ -133,6 +133,9 @@ class Peer:
                 hello_payload = {"username": self.username} if self.username else {}
                 hello_msg = Message.create(MessageType.HELLO, self.id, hello_payload)
                 await self.send_message(hello_msg)
+                # Start heartbeat after sending HELLO
+                if not self.heartbeat_task:
+                    self.heartbeat_task = asyncio.create_task(self._heartbeat())
                 return True
             except asyncio.TimeoutError:
                 self.logger.error(f"Connection timeout to {self.address}:{self.port}")
@@ -517,3 +520,17 @@ class Peer:
     def update_last_seen(self):
         """Update the last seen timestamp."""
         self.last_seen = time.time() 
+
+    def register_default_handlers(self):
+        self.register_message_handler(MessageType.HEARTBEAT, self._handle_heartbeat)
+        self.register_message_handler(MessageType.HELLO, self._handle_hello)
+
+    async def _handle_heartbeat(self, message):
+        self.logger.debug(f"Received HEARTBEAT from peer {self.id}")
+        self.last_seen = time.time()
+
+    async def _handle_hello(self, message):
+        self.logger.info(f"Received HELLO from peer {self.id}")
+        # Start heartbeat after receiving HELLO
+        if not self.heartbeat_task:
+            self.heartbeat_task = asyncio.create_task(self._heartbeat()) 
