@@ -42,6 +42,7 @@ class P2PFileSharingApp:
         self.file_manager: Optional[FileManager] = None
         self.auth_window: Optional[AuthWindow] = None
         self.main_window: Optional[MainWindow] = None
+        self.network_manager: Optional[DHT] = None # Alias for dht
     
     def create_data_directories(self):
         """Create necessary data directories."""
@@ -115,6 +116,8 @@ class P2PFileSharingApp:
             else:
                 self.logger.info("No bootstrap nodes configured, starting as first node")
                 
+            self.network_manager = self.dht # Assign the alias
+            
             return True
             
         except Exception as e:
@@ -147,10 +150,11 @@ class P2PFileSharingApp:
             self.dht.username = username
             
             assert self.file_manager is not None
+            assert self.network_manager is not None
             assert self.db_manager is not None
             self.main_window = MainWindow(
                 file_manager=self.file_manager,
-                dht=self.dht,
+                network_manager=self.network_manager,
                 db_manager=self.db_manager,
                 user_id=user_id,
                 username=username
@@ -171,12 +175,13 @@ class P2PFileSharingApp:
         self.logger.info("Cleaning up resources")
         try:
             if hasattr(self, 'file_manager') and self.file_manager:
-                self.file_manager.stop()
+                await self.file_manager.stop()
                 self.logger.debug("File manager stopped")
             if hasattr(self, 'dht') and self.dht:
                 await self.dht.stop()
                 self.logger.debug("DHT stopped")
             if hasattr(self, 'db_manager') and self.db_manager:
+                # The close method is synchronous
                 self.db_manager.close()
                 self.logger.debug("Database closed")
         except Exception as e:

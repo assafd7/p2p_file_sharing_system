@@ -175,8 +175,7 @@ class DHT:
     async def remove_peer(self, peer_id: str):
         """Remove a peer from the network."""
         if peer_id in self._peer_tasks:
-            task = self._peer_tasks.pop(peer_id)
-            task.cancel()
+            self._peer_tasks.pop(peer_id).cancel()
         if peer_id in self.peers:
             peer = self.peers.pop(peer_id)
             if self.on_peer_disconnected: await self.on_peer_disconnected(peer)
@@ -267,10 +266,6 @@ class DHT:
         self._peer_tasks[peer.id] = task
         task.add_done_callback(lambda t: self._peer_tasks.pop(peer.id, None))
 
-    def connect_to_peer_in_background(self, host: str, port: int):
-        """A non-async method to trigger a connection in the background."""
-        asyncio.create_task(self.connect_to_peer(host, port))
-
     async def connect_to_peer(self, host: str, port: int) -> Optional[Peer]:
         """Connect to a peer without starting background tasks (qasync-safe)."""
         peer_id = f"{host}:{port}"
@@ -289,7 +284,6 @@ class DHT:
                 return peer
         except Exception as e:
             self.logger.error(f"Failed to connect to {peer_id}: {e}")
-            self.peers.pop(peer_id, None) # Clean up failed connection
             return None
 
     def schedule_peer_message_task(self, peer: Peer):
@@ -338,13 +332,15 @@ class DHT:
         try:
             while self._running:
                 message = await peer.read_message()
-                if not message: break
+                if message is None: break
                 
                 peer.last_seen = time.time()
-                if message.type and message.type in self.message_handlers:
-                    await self.message_handlers[message.type](message, peer)
+
+                handler = self.message_handlers.get(message.type)
+                if handler:
+                    await handler(message, peer)
         except (ConnectionError, asyncio.IncompleteReadError, asyncio.CancelledError):
-            self.logger.info(f"Connection with {peer.id} closed.")
+            self.logger.info(f"Connection lost or cancelled with {peer.id}")
         except Exception as e:
             self.logger.error(f"Error handling messages from {peer.id}: {e}", exc_info=True)
         finally:
