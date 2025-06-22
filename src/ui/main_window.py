@@ -284,7 +284,8 @@ class MainWindow(QMainWindow):
             # Pass the file info directly instead of the item
             self.delete_file(file_info=file_info)
 
-    def share_file(self):
+    @qasync.asyncSlot()
+    async def share_file(self):
         """Handle file sharing."""
         self.logger.info("Starting file sharing process")
         
@@ -309,51 +310,41 @@ class MainWindow(QMainWindow):
         progress.setMinimumDuration(0)
         progress.show()
         
-        # Get event loop
-        loop = asyncio.get_event_loop()
-        
-        # Create future for the async operation
-        future = asyncio.run_coroutine_threadsafe(
-            self.file_manager.add_file(
+        try:
+            # Add file using qasync
+            metadata = await self.file_manager.add_file(
                 file_path,
                 self.user_id,
                 self.username
-            ),
-            loop
-        )
-        
-        # Add callback to handle completion
-        def handle_completion(fut):
-            try:
-                metadata = fut.result()
-                if metadata:
-                    self.logger.info(f"File added successfully: {metadata.name}")
-                    self.update_file_list()
-                    QMessageBox.information(
-                        self,
-                        "Success",
-                        f"File {metadata.name} has been shared successfully!"
-                    )
-                else:
-                    self.logger.error("Failed to add file: No metadata returned")
-                    QMessageBox.critical(
-                        self,
-                        "Error",
-                        "Failed to share file. Please try again."
-                    )
-            except Exception as e:
-                self.logger.error(f"Error adding file: {e}")
+            )
+            
+            if metadata:
+                self.logger.info(f"File added successfully: {metadata.name}")
+                self.update_file_list()
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"File {metadata.name} has been shared successfully!"
+                )
+            else:
+                self.logger.error("Failed to add file: No metadata returned")
                 QMessageBox.critical(
                     self,
                     "Error",
-                    f"Failed to share file: {str(e)}"
+                    "Failed to share file. Please try again."
                 )
-            finally:
-                progress.close()
-        
-        future.add_done_callback(handle_completion)
+        except Exception as e:
+            self.logger.error(f"Error adding file: {e}")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to share file: {str(e)}"
+            )
+        finally:
+            progress.close()
 
-    def download_file(self):
+    @qasync.asyncSlot()
+    async def download_file(self):
         """Handle file download."""
         try:
             # Get selected file
@@ -372,7 +363,7 @@ class MainWindow(QMainWindow):
             save_path, _ = QFileDialog.getSaveFileName(
                 self,
                 "Save File",
-                file_info['name'],
+                file_info.name,
                 "All Files (*.*)"
             )
             
@@ -385,46 +376,36 @@ class MainWindow(QMainWindow):
             progress.setAutoClose(True)
             progress.show()
             
-            # Create timer for async operation
-            timer = QTimer()
-            timer.setSingleShot(True)
-            
-            async def download():
-                try:
-                    # Start download
-                    transfer = await self.file_manager.start_file_transfer(
-                        file_info['file_id'],
-                        save_path
-                    )
-                    
-                    # Update progress
-                    while not transfer.is_complete:
-                        progress.setValue(int(transfer.progress * 100))
-                        await asyncio.sleep(0.1)
-                    
-                    progress.setValue(100)
-                    
-                    # Show success message
-                    QMessageBox.information(
-                        self,
-                        "Success",
-                        "File downloaded successfully!"
-                    )
-                except Exception as e:
-                    self.logger.error(f"Error downloading file: {e}")
-                    QMessageBox.critical(
-                        self,
-                        "Error",
-                        f"Failed to download file: {str(e)}"
-                    )
-                finally:
-                    progress.close()
-            
-            def on_timeout():
-                asyncio.create_task(download())
-            
-            timer.timeout.connect(on_timeout)
-            timer.start(0)  # Start immediately
+            try:
+                # Start download
+                transfer = await self.file_manager.start_file_transfer(
+                    file_info.file_id,
+                    save_path,
+                    self.user_id
+                )
+                
+                # Update progress
+                while not transfer.is_complete:
+                    progress.setValue(int(transfer.progress * 100))
+                    await asyncio.sleep(0.1)
+                
+                progress.setValue(100)
+                
+                # Show success message
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    "File downloaded successfully!"
+                )
+            except Exception as e:
+                self.logger.error(f"Error downloading file: {e}")
+                QMessageBox.critical(
+                    self,
+                    "Error",
+                    f"Failed to download file: {str(e)}"
+                )
+            finally:
+                progress.close()
             
         except Exception as e:
             self.logger.error(f"Error in download_file: {e}")
@@ -604,7 +585,8 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 self.show_error(f"Error cancelling transfer: {e}")
 
-    def connect_to_peer(self):
+    @qasync.asyncSlot()
+    async def connect_to_peer(self):
         """Connect to a peer using the specified address."""
         try:
             # Get peer address from user
@@ -623,18 +605,15 @@ class MainWindow(QMainWindow):
                 self.show_error("Invalid address format. Please use host:port")
                 return
                 
-            # Attempt connection
-            async def connect():
-                success = await self.network_manager.connect_to_peer(host, port)
-                if success:
-                    self.show_info(f"Successfully connected to {address}")
-                    self.update_peer_list()  # Refresh peer list
-                else:
-                    self.show_error(f"Failed to connect to {address}")
+            # Attempt connection using qasync
+            self.logger.info(f"Attempting to connect to peer {address}")
+            peer = await self.network_manager.connect_to_peer(host, port)
             
-            # Run connection in event loop
-            loop = asyncio.get_event_loop()
-            loop.create_task(connect())
+            if peer:
+                self.show_info(f"Successfully connected to {address}")
+                self.update_peer_list()  # Refresh peer list
+            else:
+                self.show_error(f"Failed to connect to {address}")
             
         except Exception as e:
             self.logger.error(f"Error connecting to peer: {e}")
