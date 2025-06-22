@@ -279,6 +279,9 @@ class DHT:
             async with self._connection_semaphore:
                 reader, writer = await asyncio.open_connection(host, port)
                 peer = Peer(reader, writer, peer_id)
+                if not await peer.connect():
+                    self.logger.error(f"Peer.connect() failed for {peer_id}")
+                    return None
                 self.peers[peer_id] = peer
                 self.add_node(PeerInfo(id=peer.id, address=peer.address, port=peer.port, last_seen=datetime.now()))
                 

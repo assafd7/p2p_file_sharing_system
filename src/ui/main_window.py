@@ -637,7 +637,7 @@ class MainWindow(QMainWindow):
             await asyncio.sleep(0.01)
             peer = await self.network_manager.connect_to_peer(host, port)
             await asyncio.sleep(0.01)
-            if peer:
+            if peer and peer.is_connected:
                 self.show_info(f"Successfully connected to {address}")
                 asyncio.create_task(self._deferred_update_peer_list())
             else:
@@ -647,7 +647,7 @@ class MainWindow(QMainWindow):
             self.show_error(f"Error connecting to peer: {str(e)}")
         finally:
             self._async_operation_in_progress = False
-            if peer:
+            if peer and peer.is_connected:
                 from PyQt6.QtCore import QTimer
                 QTimer.singleShot(0, lambda: self.network_manager.schedule_peer_message_task(peer))
 

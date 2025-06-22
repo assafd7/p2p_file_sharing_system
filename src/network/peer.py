@@ -52,8 +52,9 @@ class Peer:
         self.port = writer.get_extra_info('peername')[1]
         self.username = None
         self.last_seen = time.time()
-        self.is_connected = True
+        self.is_connected = False  # Only set to True after successful connect
         self.logger = logging.getLogger(__name__)
+        self.logger.info(f"[Peer __init__] Created Peer: id={self.id}, address={self.address}, port={self.port}, is_connected={self.is_connected}")
         self.is_disconnecting = False
         self.is_local = False
         self.known_peers = set()
@@ -119,39 +120,27 @@ class Peer:
 
     async def connect(self) -> bool:
         """Connect to the peer."""
-        if self.is_connected:
-            return True
-            
         for attempt in range(self.max_retries):
             try:
                 self.logger.info(f"Attempting to connect to {self.address}:{self.port} (attempt {attempt + 1}/{self.max_retries})")
-                
                 # Verify connection was successful
                 if not self.reader or not self.writer:
                     raise ConnectionError("Failed to establish connection")
-                    
+                # Optionally, perform handshake or send a ping here
                 self.is_connected = True
                 self.logger.info(f"Connected to peer {self.address}:{self.port}")
-                
-                # Start message processing (integrated with main event loop)
-                # Don't create separate tasks to avoid qasync conflicts
-                
-                # Start heartbeat if not local (integrated with main event loop)
-                # Don't create separate tasks to avoid qasync conflicts
-                    
                 return True
-                
             except asyncio.TimeoutError:
                 self.logger.error(f"Connection timeout to {self.address}:{self.port}")
             except ConnectionRefusedError:
                 self.logger.error(f"Connection refused by {self.address}:{self.port}")
             except Exception as e:
                 self.logger.error(f"Error connecting to {self.address}:{self.port}: {e}")
-                
             # Wait before retrying
             if attempt < self.max_retries - 1:
                 await asyncio.sleep(self.retry_delay * (attempt + 1))
-                
+        self.is_connected = False
+        self.logger.error(f"Failed to connect to peer {self.address}:{self.port} after {self.max_retries} attempts.")
         return False
 
     async def disconnect(self, send_goodbye: bool = True):
@@ -195,8 +184,9 @@ class Peer:
 
     async def send_message(self, message: Message) -> bool:
         """Send a message to the peer."""
+        self.logger.debug(f"[send_message] is_connected={self.is_connected}, writer={self.writer}, peer_id={self.id}")
         if not self.is_connected or not self.writer:
-            self.logger.error("Cannot send message: not connected")
+            self.logger.error(f"[send_message] Cannot send message: not connected (is_connected={self.is_connected}, writer={self.writer})")
             return False
             
         try:
@@ -235,6 +225,7 @@ class Peer:
 
     async def request_file_chunk(self, file_id: str, chunk_index: int):
         """Requests a specific chunk of a file from the peer."""
+        self.logger.debug(f"[request_file_chunk] is_connected={self.is_connected}, file_id={file_id}, chunk_index={chunk_index}, peer_id={self.id}")
         if not self.is_connected:
             self.logger.error("Cannot request chunk: not connected")
             return
