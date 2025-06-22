@@ -50,57 +50,68 @@ class MainWindow(QMainWindow):
                  db_manager: DatabaseManager, user_id: str, username: str):
         """Initialize the main window."""
         super().__init__()
-        
-        # Store managers
         self.file_manager = file_manager
         self.network_manager = network_manager
         self.db_manager = db_manager
         self.user_id = user_id
         self.username = username
-        
-        # Add async lock to prevent concurrent async slot executions
-        self._async_lock = asyncio.Lock()
-        
-        # Setup logging
         self.logger = logging.getLogger(__name__)
-        
-        # Initialize UI
+        self.transfer_workers: Dict[str, TransferWorker] = {}
+
+        # Add lock for async slot concurrency control
+        self._async_lock = asyncio.Lock()
+
+        # Set up network manager callbacks
+        self.network_manager.on_file_metadata_received = self.on_file_metadata_received
+
+        # Set window properties
         self.setWindowTitle("P2P File Sharing System")
-        self.setGeometry(100, 100, 1200, 800)
+        self.setGeometry(100, 100, 800, 600)
+
+        # Create central widget and main layout
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+
+        # Create user info bar
+        user_bar = QHBoxLayout()
+        user_label = QLabel(f"Logged in as: {username}")
+        user_label.setStyleSheet("font-weight: bold;")
+        user_bar.addWidget(user_label)
+        user_bar.addStretch()
         
-        # Create central widget and layout
-        self.central_widget = QWidget()
-        self.setCentralWidget(self.central_widget)
-        self.layout = QVBoxLayout(self.central_widget)
+        logout_button = QPushButton("Logout")
+        logout_button.clicked.connect(self.handle_logout)
+        user_bar.addWidget(logout_button)
         
+        main_layout.addLayout(user_bar)
+
         # Create tab widget
         self.tab_widget = QTabWidget()
-        self.layout.addWidget(self.tab_widget)
-        
+        main_layout.addWidget(self.tab_widget)
+
         # Setup tabs
-        self.setup_files_tab()
-        self.setup_transfers_tab()
-        self.setup_peers_tab()
-        self.setup_settings_tab()
-        
+        self.tab_widget.addTab(self.setup_files_tab(), "Files")
+        self.tab_widget.addTab(self.setup_transfers_tab(), "Transfers")
+        self.tab_widget.addTab(self.setup_peers_tab(), "Peers")
+        self.tab_widget.addTab(self.setup_settings_tab(), "Settings")
+
+        # Create status bar
+        self.statusBar().showMessage("Ready")
+
         # Setup menu bar
         self.setup_menu_bar()
-        
+
         # Setup update timer
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.update_ui)
         self.update_timer.start(1000)  # Update every second
         
-        # File list update flag
+        # File list update control
         self._file_list_updating = False
         
-        # Connect network manager callbacks
-        if hasattr(self.network_manager, 'on_peer_connected'):
-            self.network_manager.on_peer_connected = self.on_peer_connected
-        if hasattr(self.network_manager, 'on_peer_disconnected'):
-            self.network_manager.on_peer_disconnected = self.on_peer_disconnected
-        if hasattr(self.network_manager, 'on_peer_updated'):
-            self.network_manager.on_peer_updated = self.on_peer_updated
+        # Initial UI update
+        QTimer.singleShot(0, self.update_ui)
 
     def setup_files_tab(self):
         """Setup the files tab with file list and controls."""
@@ -470,19 +481,16 @@ class MainWindow(QMainWindow):
     async def _delete_file_async(self, file_id: str, progress_dialog: QMessageBox):
         """Asynchronously delete a file."""
         async with self._async_lock:
+            self.logger.debug(f"[qasync] Starting delete for file_id: {file_id}")
             try:
-                self.logger.debug(f"[qasync] Starting delete for file_id: {file_id}")
-                
                 # Delete the file
                 success = await self.file_manager.delete_file(file_id, self.user_id)
                 
                 if success:
-                    self.logger.info(f"Successfully deleted file {file_id}")
                     self.show_info("File deleted successfully")
-                    # Update file list directly to avoid qasync conflicts
+                    # Update file list
                     self._update_file_list_direct()
                 else:
-                    self.logger.error(f"Failed to delete file {file_id}")
                     self.show_error("Failed to delete file")
                     
             except Exception as e:
