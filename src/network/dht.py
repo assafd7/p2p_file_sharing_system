@@ -445,11 +445,14 @@ class DHT:
     def schedule_metadata_broadcast(self, metadata: 'FileMetadata'):
         """Schedules a file metadata broadcast to run in the background (qasync-safe)."""
         try:
-            # Create a task to run the broadcast coroutine
-            # This is safe because it's not awaited directly in a UI slot
-            asyncio.create_task(
-                self.broadcast_file_metadata(metadata),
-                name=f"broadcast_{metadata.file_id}"
+            loop = asyncio.get_event_loop()
+            # Use call_soon to schedule the task creation after the current UI slot returns.
+            # This is the key to avoiding the "Cannot enter into task" error.
+            loop.call_soon(
+                lambda: asyncio.create_task(
+                    self.broadcast_file_metadata(metadata),
+                    name=f"broadcast_{metadata.file_id}"
+                )
             )
             self.logger.info(f"Scheduled broadcast for file: {metadata.name}")
         except Exception as e:

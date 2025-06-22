@@ -343,8 +343,12 @@ class MainWindow(QMainWindow):
                 if self.network_manager:
                     self.network_manager.schedule_metadata_broadcast(metadata)
 
-                # Defer UI updates to prevent conflicts
-                asyncio.create_task(self._deferred_update_file_list())
+                # Defer UI updates to prevent conflicts using the safe call_soon pattern
+                loop = asyncio.get_event_loop()
+                loop.call_soon(
+                    lambda: asyncio.create_task(self._deferred_update_file_list())
+                )
+
                 self.show_info(f"File '{metadata.name}' has been shared successfully!")
             else:
                 self.logger.error("Failed to add file: No metadata returned")
@@ -359,7 +363,7 @@ class MainWindow(QMainWindow):
     async def _deferred_update_file_list(self):
         """Update file list after a delay to avoid task conflicts."""
         try:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.1) # A small delay can still be useful
             self.update_file_list()
         except Exception as e:
             self.logger.error(f"Error in deferred file list update: {e}", exc_info=True)
