@@ -622,23 +622,47 @@ class MainWindow(QMainWindow):
             except ValueError:
                 self.show_error("Invalid address format. Please use host:port")
                 return
-                
-            # Attempt connection
-            async def connect():
-                success = await self.network_manager.connect_to_peer(host, port)
-                if success:
-                    self.show_info(f"Successfully connected to {address}")
-                    self.update_peer_list()  # Refresh peer list
-                else:
-                    self.show_error(f"Failed to connect to {address}")
             
-            # Run connection in event loop
-            loop = asyncio.get_event_loop()
-            loop.create_task(connect())
+            # Stop the update timer to prevent qasync conflicts
+            self.update_timer.stop()
+            
+            # Show progress dialog
+            progress_dialog = QMessageBox(self)
+            progress_dialog.setWindowTitle("Connecting to Peer")
+            progress_dialog.setText(f"Connecting to {address}...")
+            progress_dialog.setStandardButtons(QMessageBox.StandardButton.NoButton)
+            progress_dialog.show()
+            
+            # Call the async connect method
+            self._connect_to_peer_async(host, port, address, progress_dialog)
             
         except Exception as e:
             self.logger.error(f"Error connecting to peer: {e}")
             self.show_error(f"Error connecting to peer: {str(e)}")
+
+    @qasync.asyncSlot()
+    async def _connect_to_peer_async(self, host: str, port: int, address: str, progress_dialog: QMessageBox):
+        """Asynchronously connect to a peer."""
+        try:
+            self.logger.debug(f"[qasync] Starting connection to {address}")
+            success = await self.network_manager.connect_to_peer(host, port)
+            if success:
+                self.show_info(f"Successfully connected to {address}")
+                # Update peer list synchronously to avoid conflicts
+                self.update_peer_list()
+            else:
+                self.show_error(f"Failed to connect to {address}")
+        except Exception as e:
+            self.logger.error(f"Error in async peer connection: {e}", exc_info=True)
+            self.show_error(f"Error connecting to peer: {str(e)}")
+        finally:
+            # Ensure progress dialog is closed
+            if progress_dialog and not progress_dialog.isHidden():
+                progress_dialog.close()
+                progress_dialog.deleteLater()
+            
+            # Restart the update timer
+            self.update_timer.start(1000)
 
     def disconnect_from_peer(self):
         """Disconnect from a selected peer."""
