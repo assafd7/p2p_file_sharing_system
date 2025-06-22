@@ -325,7 +325,7 @@ class MainWindow(QMainWindow):
         """Handle successful file sharing feedback."""
         self.logger.info(f"Signal received: file shared successfully: {metadata_dict.get('name')}")
         self.show_info(f"File '{metadata_dict.get('name')}' has been shared successfully!")
-                self.update_file_list()
+        self.update_file_list()
 
     @pyqtSlot(str)
     def on_file_share_failed(self, error_message):
