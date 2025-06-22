@@ -46,6 +46,8 @@ class TransferWorker(QThread):
 class MainWindow(QMainWindow):
     """Main window of the P2P file sharing application."""
     
+    peer_connected_signal = pyqtSignal(object)  # Pass the peer object
+    
     def __init__(self, file_manager: FileManager, network_manager: DHT,
                  db_manager: DatabaseManager, user_id: str, username: str):
         """Initialize the main window."""
@@ -119,6 +121,9 @@ class MainWindow(QMainWindow):
         
         # Initial UI update
         QTimer.singleShot(0, self.update_ui)
+
+        # Connect the signal to the scheduling function
+        self.peer_connected_signal.connect(self.network_manager.schedule_peer_message_task)
 
     def setup_files_tab(self):
         """Setup the files tab with file list and controls."""
@@ -640,8 +645,7 @@ class MainWindow(QMainWindow):
             await asyncio.sleep(0.01)
             if peer:
                 self.show_info(f"Successfully connected to {address}")
-                from PyQt6.QtCore import QTimer
-                QTimer.singleShot(0, lambda: self.network_manager.schedule_peer_message_task(peer))
+                self.peer_connected_signal.emit(peer)  # Emit signal here
                 asyncio.create_task(self._deferred_update_peer_list())
             else:
                 self.show_error(f"Failed to connect to {address}")
