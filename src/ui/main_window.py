@@ -851,7 +851,7 @@ class MainWindow(QMainWindow):
             return
             
         try:
-            self.logger.info("Starting peer list update")
+            self.logger.info(f"[UI] Updating peer list. Current peers: {list(self.network_manager.peers.keys())}")
             self.peer_list.clear()
             
             # Get connected peers
@@ -886,7 +886,7 @@ class MainWindow(QMainWindow):
             # Resize columns to fit content
             for i in range(self.peer_list.columnCount()):
                 self.peer_list.resizeColumnToContents(i)
-            self.logger.info("Completed peer list update")
+            self.logger.info(f"[UI] Peer list update complete. Displayed peers: {self.peer_list.topLevelItemCount()}")
         except Exception as e:
             self.logger.error(f"Error updating peer list: {e}")
 
