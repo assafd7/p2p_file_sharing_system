@@ -9,7 +9,6 @@ from .protocol import Message, MessageType
 from .peer import Peer, PeerInfo
 from src.database.db_manager import DatabaseManager
 from src.file_management.file_metadata import FileMetadata
-import platform
 
 class DHTError(Exception):
     """Base exception class for DHT-related errors."""
@@ -321,15 +320,11 @@ class DHT:
     async def connect_to_peer(self, host: str, port: int) -> Optional[Peer]:
         """Connect to a peer."""
         try:
-            # Create connection with timeout and retry logic
+            # Create connection with timeout
             self.logger.info(f"Attempting to connect to {host}:{port}")
-            
-            # Use a longer timeout for Windows
-            timeout = 15.0 if platform.system() == "Windows" else 10.0
-            
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(host, port),
-                timeout=timeout
+                timeout=10.0  # 10 second timeout
             )
             
             # Get peer address
@@ -345,35 +340,22 @@ class DHT:
             # Start message processing
             asyncio.create_task(self._process_messages(peer))
             
-            # Send our username with retry logic
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    self.logger.info(f"Sending username '{self.username}' to peer {peer_id} (attempt {attempt + 1})")
-                    await asyncio.wait_for(
-                        self.send_message(
-                            Message(
-                                type=MessageType.USER_INFO,
-                                sender_id=self.node_id,
-                                payload={'username': self.username}
-                            ),
-                            peer
-                        ),
-                        timeout=5.0
-                    )
-                    self.logger.info(f"Successfully sent username to peer {peer_id}")
-                    break
-                except asyncio.TimeoutError:
-                    self.logger.warning(f"Timeout sending username to peer {peer_id} (attempt {attempt + 1})")
-                    if attempt == max_retries - 1:
-                        raise
-                    await asyncio.sleep(1)
-                except Exception as e:
-                    self.logger.error(f"Error sending initial message to peer {peer_id}: {e}")
-                    if attempt == max_retries - 1:
-                        await self._handle_peer_disconnect(peer)
-                        return None
-                    await asyncio.sleep(1)
+            # Send our username
+            try:
+                self.logger.info(f"Sending username '{self.username}' to peer {peer_id}")
+                await self.send_message(
+                    Message(
+                        type=MessageType.USER_INFO,
+                        sender_id=self.node_id,
+                        payload={'username': self.username}
+                    ),
+                    peer
+                )
+                self.logger.info(f"Successfully sent username to peer {peer_id}")
+            except Exception as e:
+                self.logger.error(f"Error sending initial message to peer {peer_id}: {e}")
+                await self._handle_peer_disconnect(peer)
+                return None
             
             # Notify UI
             if hasattr(self, 'on_peer_connected'):
@@ -383,19 +365,10 @@ class DHT:
             return peer
             
         except asyncio.TimeoutError:
-            self.logger.error(f"Connection timeout to {host}:{port}")
-            return None
-        except ConnectionRefusedError:
-            self.logger.error(f"Connection refused by {host}:{port}")
-            return None
-        except OSError as e:
-            if e.winerror == 121:  # Windows semaphore timeout
-                self.logger.error(f"Windows semaphore timeout connecting to {host}:{port}. This may be a firewall or network issue.")
-            else:
-                self.logger.error(f"OS error connecting to {host}:{port}: {e}")
+            self.logger.error(f"Connection timeout to {host}:{port} - peer not reachable")
             return None
         except Exception as e:
-            self.logger.error(f"Error connecting to peer: {e}")
+            self.logger.error(f"Error connecting to peer {host}:{port}: {e}")
             return None
 
     def _get_bucket_index(self, node_id: str) -> int:
