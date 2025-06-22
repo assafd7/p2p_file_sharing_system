@@ -74,6 +74,7 @@ class DHT:
             MessageType.CHUNK_REQUEST: self._handle_chunk_request,
             MessageType.CHUNK_RESPONSE: self._handle_chunk_response,
             MessageType.FIND_NODE: self._handle_find_node,
+            MessageType.HELLO: self._handle_hello,
         }
         
     @property
@@ -193,6 +194,7 @@ class DHT:
             MessageType.CHUNK_REQUEST: self._handle_chunk_request,
             MessageType.CHUNK_RESPONSE: self._handle_chunk_response,
             MessageType.FIND_NODE: self._handle_find_node,
+            MessageType.HELLO: self._handle_hello,
         }
         self.logger.debug("Registered message handlers")
             
@@ -228,37 +230,12 @@ class DHT:
             peer = Peer(reader, writer, peer_id)
             self.peers[peer_id] = peer
             self.add_node(PeerInfo(id=peer.id, address=peer.address, port=peer.port, last_seen=datetime.now()))
-            
+            # Send HELLO message after accepting connection
+            hello_msg = Message(type=MessageType.HELLO, sender_id=self.node_id, payload={"username": self.username})
+            await peer.send_message(hello_msg)
             if self.on_peer_connected: await self.on_peer_connected(peer)
             self._start_peer_message_loop(peer)
 
-    async def handle_peer_list(self, message: Message, peer: Peer):
-        """Handle peer list messages."""
-        try:
-            peers = message.payload.get('peers', [])
-            self.logger.debug(f"Received peer list with {len(peers)} peers from {peer.id}")
-            
-            # Process each peer in the list
-            for peer_info in peers:
-                try:
-                    # Skip if it's our own peer info
-                    if peer_info['id'] == self.node_id:
-                        continue
-                        
-                    # Skip if we already know this peer
-                    if peer_info['id'] in self.peers:
-                        continue
-                        
-                    # Connect to the new peer
-                    await self.connect_to_peer(peer_info['host'], peer_info['port'])
-                    
-                except Exception as e:
-                    self.logger.error(f"Error processing peer {peer_info.get('id')}: {e}")
-                    continue
-                    
-        except Exception as e:
-            self.logger.error(f"Error handling peer list: {e}")
-            
     def _start_peer_message_loop(self, peer: Peer):
         """Creates and tracks the message handling task for a peer."""
         if peer.id in self._peer_tasks:
@@ -285,6 +262,9 @@ class DHT:
                 self.peers[peer_id] = peer
                 self.add_node(PeerInfo(id=peer.id, address=peer.address, port=peer.port, last_seen=datetime.now()))
                 
+                # Send HELLO message after successful connection
+                hello_msg = Message(type=MessageType.HELLO, sender_id=self.node_id, payload={"username": self.username})
+                await peer.send_message(hello_msg)
                 if self.on_peer_connected: await self.on_peer_connected(peer)
                 # Do NOT start peer message loop here!
                 return peer
@@ -905,3 +885,8 @@ class DHT:
         }
         response = Message(type=MessageType.PEER_LIST, payload=response_payload)
         await peer.send_message(response)
+
+    async def _handle_hello(self, message: Message, peer: Peer):
+        """Handle HELLO handshake message."""
+        self.logger.info(f"Received HELLO from peer {peer.id} (username: {message.payload.get('username')})")
+        # Optionally, respond with a HELLO or mark handshake complete
