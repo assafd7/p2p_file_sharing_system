@@ -67,6 +67,7 @@ class DHT:
         self._lock = asyncio.Lock()
         self._cleanup_task = None
         self._seen_metadata: Set[str] = set()  # Track seen metadata to prevent loops
+        self._peer_tasks: Dict[str, asyncio.Task] = {}  # Track peer message handling tasks
         
         # Initialize message handlers
         self.message_handlers = {
@@ -156,7 +157,18 @@ class DHT:
         if self._running:
             self._running = False
             
-            # No cleanup task to cancel since we removed it to avoid qasync conflicts
+            # Cancel all peer message handling tasks
+            for peer_id, task in list(self._peer_tasks.items()):
+                if not task.done():
+                    self.logger.debug(f"Cancelling peer task for {peer_id}")
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass  # Expected when cancelling
+            
+            # Clear peer tasks
+            self._peer_tasks.clear()
             
             # Disconnect from all peers
             for peer_id in list(self.peers.keys()):
@@ -287,8 +299,12 @@ class DHT:
             if hasattr(self, 'on_peer_connected'):
                 self.on_peer_connected(peer)
             
-            # Start message handling as a background task
-            asyncio.create_task(self._handle_peer_messages_loop(peer))
+            # Start message handling as a background task with proper tracking
+            task = asyncio.create_task(self._handle_peer_messages_loop(peer), name=f"peer_messages_{peer_id}")
+            self._peer_tasks[peer_id] = task
+            
+            # Add callback to clean up task when it's done
+            task.add_done_callback(lambda t: self._cleanup_peer_task(peer_id, t))
                 
         except Exception as e:
             self.logger.error(f"Error handling connection: {e}")
@@ -365,8 +381,12 @@ class DHT:
                 self.logger.info(f"Notifying UI of new peer connection: {peer_id}")
                 self.on_peer_connected(peer)
             
-            # Start message handling as a background task
-            asyncio.create_task(self._handle_peer_messages_loop(peer))
+            # Start message handling as a background task with proper tracking
+            task = asyncio.create_task(self._handle_peer_messages_loop(peer), name=f"peer_messages_{peer_id}")
+            self._peer_tasks[peer_id] = task
+            
+            # Add callback to clean up task when it's done
+            task.add_done_callback(lambda t: self._cleanup_peer_task(peer_id, t))
                 
             return peer
             
@@ -376,6 +396,19 @@ class DHT:
         except Exception as e:
             self.logger.error(f"Error connecting to peer: {e}")
             return None
+
+    def _cleanup_peer_task(self, peer_id: str, task: asyncio.Task):
+        """Clean up peer task when it's done."""
+        try:
+            if not task.cancelled():
+                task.result()  # This will raise any exception that occurred
+        except Exception as e:
+            self.logger.error(f"Peer task for {peer_id} failed: {e}")
+        finally:
+            # Remove task from tracking
+            if peer_id in self._peer_tasks:
+                del self._peer_tasks[peer_id]
+            self.logger.debug(f"Cleaned up peer task for {peer_id}")
 
     async def _handle_peer_messages_loop(self, peer: Peer):
         """Handle messages from a peer in a continuous loop as a background task."""
@@ -404,14 +437,23 @@ class DHT:
                 except asyncio.TimeoutError:
                     # Timeout is expected, continue loop
                     continue
+                except asyncio.CancelledError:
+                    # Task was cancelled, exit gracefully
+                    self.logger.debug(f"Peer message loop cancelled for {peer.id}")
+                    break
                 except Exception as e:
                     self.logger.error(f"Error in message handling loop: {e}")
                     break
                     
+        except asyncio.CancelledError:
+            # Task was cancelled, exit gracefully
+            self.logger.debug(f"Peer message loop cancelled for {peer.id}")
         except Exception as e:
             self.logger.error(f"Error in peer message loop: {e}")
         finally:
-            await self._handle_peer_disconnect(peer)
+            # Only call disconnect if we're not already disconnecting
+            if peer.id in self.peers:
+                await self._handle_peer_disconnect(peer)
 
     def _get_bucket_index(self, node_id: str) -> int:
         """Get the index of the k-bucket for a given node ID."""
@@ -756,6 +798,17 @@ class DHT:
         """Handle peer disconnection."""
         try:
             if peer.id in self.peers:
+                # Cancel the peer message handling task
+                if peer.id in self._peer_tasks:
+                    task = self._peer_tasks[peer.id]
+                    if not task.done():
+                        self.logger.debug(f"Cancelling peer task for {peer.id}")
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass  # Expected when cancelling
+                
                 # Close the connection
                 await peer.close()
                 
