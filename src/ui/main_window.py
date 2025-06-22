@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import asyncio
 import qasync
+import inspect
 
 from src.file_management.file_manager import FileManager
 from src.network.dht import DHT
@@ -42,6 +43,12 @@ class TransferWorker(QThread):
 
     def stop(self):
         self.is_running = False
+
+def log_task_start(label):
+    import asyncio
+    import logging
+    current = asyncio.current_task()
+    logging.debug(f"[TASK START] {label} | Current task: {current.get_name() if current else 'None'} | Stack: {inspect.stack()[1].function}")
 
 class MainWindow(QMainWindow):
     """Main window of the P2P file sharing application."""
@@ -116,7 +123,7 @@ class MainWindow(QMainWindow):
 
         # Start the background worker
         self.file_manager.start()
-
+        
         # Initial UI update
         QTimer.singleShot(0, self.update_ui)
 
@@ -302,7 +309,7 @@ class MainWindow(QMainWindow):
         if self._async_operation_in_progress:
             self.show_warning("Please wait for the current operation to complete.")
             return
-
+            
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select File to Share",
@@ -325,7 +332,7 @@ class MainWindow(QMainWindow):
         """Handle successful file sharing feedback."""
         self.logger.info(f"Signal received: file shared successfully: {metadata_dict.get('name')}")
         self.show_info(f"File '{metadata_dict.get('name')}' has been shared successfully!")
-        self.update_file_list()
+                self.update_file_list()
 
     @pyqtSlot(str)
     def on_file_share_failed(self, error_message):
@@ -614,11 +621,10 @@ class MainWindow(QMainWindow):
 
     @qasync.asyncSlot()
     async def connect_to_peer(self):
-        """Connect to a peer using the specified address."""
+        log_task_start('connect_to_peer slot entered')
         if self._async_operation_in_progress:
             self.logger.info("Peer connection operation already in progress")
             return
-            
         self._async_operation_in_progress = True
         try:
             address, ok = QInputDialog.getText(
@@ -635,12 +641,15 @@ class MainWindow(QMainWindow):
                 self._async_operation_in_progress = False
                 return
             self.logger.info(f"Attempting to connect to peer {address}")
+            log_task_start('about to await network_manager.connect_to_peer')
             await asyncio.sleep(0.01)
             peer = await self.network_manager.connect_to_peer(host, port)
             await asyncio.sleep(0.01)
+            log_task_start('about to schedule peer message task')
+            loop = asyncio.get_running_loop()
+            loop.call_soon(asyncio.create_task, self.network_manager._handle_peer_messages_loop(peer))
             if peer:
                 self.show_info(f"Successfully connected to {address}")
-                self.network_manager.schedule_peer_message_task(peer)
                 asyncio.create_task(self._deferred_update_peer_list())
             else:
                 self.show_error(f"Failed to connect to {address}")
@@ -737,13 +746,13 @@ class MainWindow(QMainWindow):
 
     @qasync.asyncSlot()
     async def _update_file_list_async(self):
-        """Asynchronously update the file list."""
+        log_task_start('_update_file_list_async slot entered')
         if self._async_operation_in_progress:
             self.logger.info("File list update operation already in progress")
             return
-            
         self._async_operation_in_progress = True
         try:
+            log_task_start('about to await file_manager.get_shared_files')
             files = await self.file_manager.get_shared_files()
             self.logger.debug(f"[qasync] Got {len(files)} files from get_shared_files")
             self._update_file_list_ui(files)
