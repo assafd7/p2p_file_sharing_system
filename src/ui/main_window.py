@@ -662,12 +662,21 @@ class MainWindow(QMainWindow):
                 self._async_operation_in_progress = False
                 return
                 
-            # Attempt connection using qasync
+            # Attempt connection using qasync with proper task management
             self.logger.info(f"Attempting to connect to peer {address}")
+            
+            # Use a small delay to ensure the UI event loop has time to process
+            await asyncio.sleep(0.01)
+            
             peer = await self.network_manager.connect_to_peer(host, port)
+            
+            # Add another small delay to allow the connection to stabilize
+            await asyncio.sleep(0.01)
             
             if peer:
                 self.show_info(f"Successfully connected to {address}")
+                # Update peer list after a short delay to allow the connection to be established
+                await asyncio.sleep(0.1)
                 self.update_peer_list()  # Refresh peer list
             else:
                 self.show_error(f"Failed to connect to {address}")
