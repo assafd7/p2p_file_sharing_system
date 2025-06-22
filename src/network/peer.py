@@ -129,6 +129,10 @@ class Peer:
                 # Optionally, perform handshake or send a ping here
                 self.is_connected = True
                 self.logger.info(f"Connected to peer {self.address}:{self.port}")
+                # Send HELLO message immediately after connecting
+                hello_payload = {"username": self.username} if self.username else {}
+                hello_msg = Message.create(MessageType.HELLO, self.id, hello_payload)
+                await self.send_message(hello_msg)
                 return True
             except asyncio.TimeoutError:
                 self.logger.error(f"Connection timeout to {self.address}:{self.port}")
