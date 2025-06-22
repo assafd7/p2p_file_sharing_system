@@ -15,19 +15,25 @@ from src.database.db_manager import DatabaseManager
 from src.file_management.file_transfer import FileTransfer
 from src.file_management.file_metadata import FileMetadata, FileMetadataManager, FileChunk
 from src.network.dht import DHT
+from PyQt6.QtCore import QObject, pyqtSignal
 
 class FileManagerError(Exception):
     """Exception raised for file manager errors."""
     pass
 
-class FileManager:
+class FileManager(QObject):
     """Manages file operations in the P2P file sharing system."""
+
+    # Signals for UI updates
+    file_added_signal = pyqtSignal(dict)
+    file_add_failed_signal = pyqtSignal(str)
 
     # Constants
     CHUNK_SIZE = 1024 * 1024  # 1MB chunks
 
     def __init__(self, storage_dir: str, temp_dir: str, cache_dir: str,
                  db_manager: DatabaseManager, dht: Optional[DHT] = None):
+        super().__init__()
         self.storage_dir = Path(storage_dir)
         self.temp_dir = Path(temp_dir)
         self.cache_dir = Path(cache_dir)
@@ -41,7 +47,85 @@ class FileManager:
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Queue for processing file sharing requests
+        self._sharing_queue = asyncio.Queue()
+        self._worker_task = None
     
+    def start(self):
+        """Starts the file manager's background worker tasks."""
+        self.logger.info("Starting FileManager background worker.")
+        self._worker_task = asyncio.create_task(self._process_sharing_queue())
+
+    async def stop(self):
+        """Stops the file manager's background worker tasks."""
+        self.logger.info("Stopping FileManager background worker.")
+        if self._worker_task:
+            self._sharing_queue.put_nowait(None) # Sentinel to stop the worker
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
+        self.logger.info("FileManager worker stopped.")
+
+    def share_file_in_background(self, file_path: str, owner_id: str, owner_name: str):
+        """Public method for the UI to request a file to be shared."""
+        try:
+            self._sharing_queue.put_nowait((file_path, owner_id, owner_name))
+            self.logger.info(f"Queued file for sharing: {file_path}")
+        except asyncio.QueueFull:
+            self.logger.error("Sharing queue is full. Cannot share file at the moment.")
+            self.file_add_failed_signal.emit("Processing queue is full. Please try again later.")
+
+    async def _process_sharing_queue(self):
+        """The worker that processes file sharing requests from the queue."""
+        self.logger.info("File sharing worker started.")
+        while True:
+            job = await self._sharing_queue.get()
+            if job is None: # Sentinel value to stop the loop
+                break
+
+            file_path, owner_id, owner_name = job
+            self.logger.info(f"Processing share request for: {file_path}")
+            
+            try:
+                # 1. Perform all local processing (hashing, DB write)
+                metadata = await self._add_file_locally(file_path, owner_id, owner_name)
+                
+                # 2. Schedule the network broadcast safely
+                if self.dht and metadata:
+                    self.dht.schedule_metadata_broadcast(metadata)
+
+                # 3. Signal the UI that the file was added successfully
+                if metadata:
+                    self.file_added_signal.emit(metadata.to_dict())
+                    self.logger.info(f"Successfully processed and shared file: {metadata.name}")
+
+            except Exception as e:
+                self.logger.error(f"Failed to process share request for {file_path}: {e}", exc_info=True)
+                self.file_add_failed_signal.emit(f"Failed to share {os.path.basename(file_path)}: {e}")
+            finally:
+                self._sharing_queue.task_done()
+        self.logger.info("File sharing worker stopped.")
+
+    async def _add_file_locally(self, file_path: str, owner_id: str, owner_name: str) -> Optional[FileMetadata]:
+        """Adds a file to the system for sharing (without broadcasting)."""
+        try:
+            self.logger.info(f"Adding file locally: {file_path}")
+            
+            metadata = await self.create_file_metadata(file_path, owner_id)
+            metadata.owner_name = owner_name
+            
+            await self.db_manager.store_file_metadata(metadata)
+            await self.metadata_manager.add_metadata(metadata)
+            
+            self.logger.info(f"File added locally: {metadata.name}")
+            return metadata
+            
+        except Exception as e:
+            self.logger.error(f"Error adding file locally: {e}", exc_info=True)
+            raise
+
     async def _calculate_file_hash(self, file_path: str) -> str:
         """Calculate SHA-256 hash of a file."""
         sha256_hash = hashlib.sha256()
@@ -51,34 +135,11 @@ class FileManager:
         return sha256_hash.hexdigest()
     
     async def add_file(self, file_path: str, owner_id: str, owner_name: str) -> Optional[FileMetadata]:
-        """Adds a file to the system for sharing (without broadcasting)."""
-        try:
-            self.logger.info(f"Adding file: {file_path}")
-            
-            # Calculate hash and create metadata
-            self.logger.debug("Creating file metadata...")
-            metadata = await self.create_file_metadata(file_path, owner_id)
-            metadata.owner_name = owner_name # Set the owner's name
-            self.logger.debug(f"Metadata created: {metadata}")
-            
-            # Store metadata in the database
-            self.logger.debug("Storing metadata in database...")
-            await self.db_manager.store_file_metadata(metadata)
-            self.logger.debug("Metadata stored in database successfully")
-            
-            # Store metadata in memory
-            self.logger.debug("Storing metadata in memory...")
-            await self.metadata_manager.add_metadata(metadata)
-            self.logger.debug("Metadata stored in memory successfully")
-            
-            # NOTE: We do NOT broadcast here. The UI will schedule the broadcast.
-            
-            self.logger.info(f"File added locally: {metadata.name}")
-            return metadata
-            
-        except Exception as e:
-            self.logger.error(f"Error adding file: {e}", exc_info=True)
-            raise
+        """DEPRECATED: Use share_file_in_background instead."""
+        self.logger.warning("The 'add_file' method is deprecated. Use 'share_file_in_background'.")
+        # For backward compatibility, just queue it.
+        self.share_file_in_background(file_path, owner_id, owner_name)
+        return None # This method no longer returns metadata directly
     
     async def delete_file(self, file_id: str, user_id: str) -> bool:
         """Delete a file from the system.

@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QTabWidget, QTreeWidget, QTreeWidgetItem, QListWidgetItem, QInputDialog, QLineEdit,
     QListWidget, QProgressDialog, QSplitter, QFrame
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, pyqtSlot
 from PyQt6.QtGui import QIcon, QAction
 import logging
 from typing import Dict, List, Optional
@@ -110,6 +110,13 @@ class MainWindow(QMainWindow):
         # File list update control
         self._file_list_updating = False
         
+        # Connect FileManager signals to UI slots
+        self.file_manager.file_added_signal.connect(self.on_file_shared_successfully)
+        self.file_manager.file_add_failed_signal.connect(self.on_file_share_failed)
+
+        # Start the background worker
+        self.file_manager.start()
+
         # Initial UI update
         QTimer.singleShot(0, self.update_ui)
 
@@ -291,13 +298,11 @@ class MainWindow(QMainWindow):
             self.delete_file(file_info=file_info)
 
     def share_file(self):
-        """Handle file sharing by showing a dialog and then scheduling the async sharing task."""
+        """Handle file sharing by showing a dialog and queueing the work."""
         if self._async_operation_in_progress:
-            self.logger.info("An async operation is already in progress.")
             self.show_warning("Please wait for the current operation to complete.")
             return
 
-        # Get file path from user
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select File to Share",
@@ -309,64 +314,24 @@ class MainWindow(QMainWindow):
             self.logger.info("File selection cancelled")
             return
             
-        # Schedule the async part of the file sharing
-        self._share_file_async(file_path)
+        # Show immediate feedback
+        self.show_info(f"Processing '{os.path.basename(file_path)}' for sharing in the background.")
 
-    @qasync.asyncSlot()
-    async def _share_file_async(self, file_path: str):
-        """Asynchronously add a file and broadcast its metadata."""
-        if self._async_operation_in_progress:
-            self.logger.info("File sharing operation already in progress")
-            return
-            
-        self._async_operation_in_progress = True
-        self.logger.info(f"Starting async file sharing for: {file_path}")
-        
-        progress = QProgressDialog("Adding file...", "Cancel", 0, 0, self)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setWindowTitle("Sharing File")
-        progress.setMinimumDuration(0)
-        progress.show()
-        
-        try:
-            # Add file locally (hashes, saves to DB, etc., but doesn't broadcast)
-            metadata = await self.file_manager.add_file(
-                file_path,
-                self.user_id,
-                self.username
-            )
-            
-            if metadata:
-                self.logger.info(f"File added locally: {metadata.name}")
+        # Queue the file for processing in the background. This is non-blocking.
+        self.file_manager.share_file_in_background(file_path, self.user_id, self.username)
 
-                # Now, schedule the network broadcast safely
-                if self.network_manager:
-                    self.network_manager.schedule_metadata_broadcast(metadata)
+    @pyqtSlot(dict)
+    def on_file_shared_successfully(self, metadata_dict):
+        """Handle successful file sharing feedback."""
+        self.logger.info(f"Signal received: file shared successfully: {metadata_dict.get('name')}")
+        self.show_info(f"File '{metadata_dict.get('name')}' has been shared successfully!")
+        self.update_file_list()
 
-                # Defer UI updates to prevent conflicts using the safe call_soon pattern
-                loop = asyncio.get_event_loop()
-                loop.call_soon(
-                    lambda: asyncio.create_task(self._deferred_update_file_list())
-                )
-
-                self.show_info(f"File '{metadata.name}' has been shared successfully!")
-            else:
-                self.logger.error("Failed to add file: No metadata returned")
-                self.show_error("Failed to share file. Please see logs for details.")
-        except Exception as e:
-            self.logger.error(f"Error adding file: {e}", exc_info=True)
-            self.show_error(f"Failed to share file: {str(e)}")
-        finally:
-            progress.close()
-            self._async_operation_in_progress = False
-
-    async def _deferred_update_file_list(self):
-        """Update file list after a delay to avoid task conflicts."""
-        try:
-            await asyncio.sleep(0.1) # A small delay can still be useful
-            self.update_file_list()
-        except Exception as e:
-            self.logger.error(f"Error in deferred file list update: {e}", exc_info=True)
+    @pyqtSlot(str)
+    def on_file_share_failed(self, error_message):
+        """Handle failed file sharing feedback."""
+        self.logger.error(f"Signal received: file share failed: {error_message}")
+        self.show_error(error_message)
 
     @qasync.asyncSlot()
     async def download_file(self):
@@ -981,9 +946,14 @@ class MainWindow(QMainWindow):
             self.show_error(f"Error during cleanup: {e}")
 
     def closeEvent(self, event):
-        """Handle window close event."""
+        """Handle the window closing event."""
+        self.logger.info("Main window is closing. Cleaning up...")
         self.cleanup()
-        event.accept() 
+        # Schedule the file manager stop, but don't block the UI thread
+        if self.file_manager:
+            loop = asyncio.get_event_loop()
+            loop.create_task(self.file_manager.stop())
+        super().closeEvent(event)
 
     def show_error(self, message):
         QMessageBox.critical(self, "Error", str(message))

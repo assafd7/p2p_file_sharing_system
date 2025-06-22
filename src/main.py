@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import QTimer
 import logging
 import qasync
+from typing import Optional
 
 from src.ui.main_window import MainWindow
 from src.ui.auth_window import AuthWindow
@@ -35,12 +36,13 @@ class P2PFileSharingApp:
         self.app = QApplication(sys.argv)
         self.app.setApplicationName(WINDOW_TITLE)
         
-        self.db_manager = None
-        self.security_manager = None
-        self.dht = None
-        self.file_manager = None
-        self.auth_window = None
-        self.main_window = None
+        self.db_manager: Optional[DatabaseManager] = None
+        self.security_manager: Optional[SecurityManager] = None
+        self.dht: Optional[DHT] = None
+        self.file_manager: Optional[FileManager] = None
+        self.auth_window: Optional[AuthWindow] = None
+        self.main_window: Optional[MainWindow] = None
+        self.network_manager: Optional[DHT] = None # Alias for dht
     
     def create_data_directories(self):
         """Create necessary data directories."""
@@ -81,7 +83,7 @@ class P2PFileSharingApp:
             self.security_manager = SecurityManager()
             self.logger.debug("Security manager initialized")
             
-            self.db_manager = DatabaseManager(DB_PATH)
+            self.db_manager = DatabaseManager(str(DB_PATH))
             await self.db_manager.initialize()
             self.logger.debug("Database manager initialized")
             
@@ -99,13 +101,14 @@ class P2PFileSharingApp:
             self.logger.debug("DHT initialized and started")
             
             self.file_manager = FileManager(
-                storage_dir=FILES_DIR,
-                temp_dir=TEMP_DIR,
-                cache_dir=CACHE_DIR,
+                storage_dir=str(FILES_DIR),
+                temp_dir=str(TEMP_DIR),
+                cache_dir=str(CACHE_DIR),
                 db_manager=self.db_manager,
                 dht=self.dht
             )
-            self.logger.debug("File manager initialized")
+            self.file_manager.start()
+            self.logger.debug("File manager initialized and worker started")
             
             if BOOTSTRAP_NODES:
                 await self.dht.join_network(BOOTSTRAP_NODES)
@@ -113,6 +116,8 @@ class P2PFileSharingApp:
             else:
                 self.logger.info("No bootstrap nodes configured, starting as first node")
                 
+            self.network_manager = self.dht # Assign the alias
+            
             return True
             
         except Exception as e:
@@ -123,6 +128,10 @@ class P2PFileSharingApp:
     def create_gui_components(self):
         """Create GUI components."""
         try:
+            # Assert that the required components are initialized before use
+            assert self.db_manager is not None
+            assert self.security_manager is not None
+
             self.auth_window = AuthWindow(self.db_manager, self.security_manager)
             self.auth_window.auth_successful.connect(self.on_auth_successful)
             self.auth_window.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
@@ -137,11 +146,15 @@ class P2PFileSharingApp:
         try:
             self.logger.info(f"User authenticated: {username} ({user_id})")
             
+            assert self.dht is not None
             self.dht.username = username
             
+            assert self.file_manager is not None
+            assert self.network_manager is not None
+            assert self.db_manager is not None
             self.main_window = MainWindow(
                 file_manager=self.file_manager,
-                network_manager=self.dht,
+                network_manager=self.network_manager,
                 db_manager=self.db_manager,
                 user_id=user_id,
                 username=username
@@ -149,6 +162,7 @@ class P2PFileSharingApp:
             self.main_window.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
             self.main_window.show()
             
+            assert self.auth_window is not None
             self.auth_window.hide()
             self.logger.debug("Main window created and shown")
             
@@ -160,11 +174,15 @@ class P2PFileSharingApp:
         """Clean up resources."""
         self.logger.info("Cleaning up resources")
         try:
+            if hasattr(self, 'file_manager') and self.file_manager:
+                await self.file_manager.stop()
+                self.logger.debug("File manager stopped")
             if hasattr(self, 'dht') and self.dht:
                 await self.dht.stop()
                 self.logger.debug("DHT stopped")
             if hasattr(self, 'db_manager') and self.db_manager:
-                await self.db_manager.close()
+                # The close method is synchronous
+                self.db_manager.close()
                 self.logger.debug("Database closed")
         except Exception as e:
             self.logger.error(f"Error during cleanup: {e}")
@@ -188,6 +206,7 @@ def main():
                 return 1
             
             # Show auth window
+            assert app_instance.auth_window is not None
             app_instance.auth_window.show()
             
             # Create a future that will be cancelled when the app closes
@@ -201,12 +220,11 @@ def main():
             
             app_instance.app.aboutToQuit.connect(on_about_to_quit)
             
-            # Wait for the future to be cancelled (when app closes)
+            # Wait for the app to finish
             try:
                 await app_future
             except asyncio.CancelledError:
-                # This is expected when the app closes
-                pass
+                pass # Expected when app closes
             
             return 0
             
