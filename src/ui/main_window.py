@@ -58,8 +58,8 @@ class MainWindow(QMainWindow):
         self.logger = logging.getLogger(__name__)
         self.transfer_workers: Dict[str, TransferWorker] = {}
 
-        # Add lock for async slot concurrency control
-        self._async_lock = asyncio.Lock()
+        # Add flag for async slot concurrency control
+        self._async_operation_in_progress = False
 
         # Set up network manager callbacks
         self.network_manager.on_file_metadata_received = self.on_file_metadata_received
@@ -293,149 +293,170 @@ class MainWindow(QMainWindow):
     @qasync.asyncSlot()
     async def share_file(self):
         """Handle file sharing."""
-        async with self._async_lock:
-            self.logger.info("Starting file sharing process")
+        if self._async_operation_in_progress:
+            self.logger.info("File sharing operation already in progress")
+            return
             
-            # Get file path from user
-            file_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "Select File to Share",
-                "",
-                "All Files (*.*)"
+        self._async_operation_in_progress = True
+        self.logger.info("Starting file sharing process")
+        
+        # Get file path from user
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select File to Share",
+            "",
+            "All Files (*.*)"
+        )
+        
+        if not file_path:
+            self.logger.info("File selection cancelled")
+            self._async_operation_in_progress = False
+            return
+            
+        self.logger.info(f"Selected file: {file_path}")
+        
+        # Show progress dialog
+        progress = QProgressDialog("Adding file...", "Cancel", 0, 0, self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setWindowTitle("Adding File")
+        progress.setMinimumDuration(0)
+        progress.show()
+        
+        try:
+            # Add file using qasync
+            metadata = await self.file_manager.add_file(
+                file_path,
+                self.user_id,
+                self.username
             )
             
-            if not file_path:
-                self.logger.info("File selection cancelled")
-                return
-                
-            self.logger.info(f"Selected file: {file_path}")
-            
-            # Show progress dialog
-            progress = QProgressDialog("Adding file...", "Cancel", 0, 0, self)
-            progress.setWindowModality(Qt.WindowModality.WindowModal)
-            progress.setWindowTitle("Adding File")
-            progress.setMinimumDuration(0)
-            progress.show()
-            
-            try:
-                # Add file using qasync
-                metadata = await self.file_manager.add_file(
-                    file_path,
-                    self.user_id,
-                    self.username
+            if metadata:
+                self.logger.info(f"File added successfully: {metadata.name}")
+                self.update_file_list()
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    f"File {metadata.name} has been shared successfully!"
                 )
-                
-                if metadata:
-                    self.logger.info(f"File added successfully: {metadata.name}")
-                    self.update_file_list()
-                    QMessageBox.information(
-                        self,
-                        "Success",
-                        f"File {metadata.name} has been shared successfully!"
-                    )
-                else:
-                    self.logger.error("Failed to add file: No metadata returned")
-                    QMessageBox.critical(
-                        self,
-                        "Error",
-                        "Failed to share file. Please try again."
-                    )
-            except Exception as e:
-                self.logger.error(f"Error adding file: {e}")
+            else:
+                self.logger.error("Failed to add file: No metadata returned")
                 QMessageBox.critical(
                     self,
                     "Error",
-                    f"Failed to share file: {str(e)}"
+                    "Failed to share file. Please try again."
                 )
-            finally:
-                progress.close()
+        except Exception as e:
+            self.logger.error(f"Error adding file: {e}")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to share file: {str(e)}"
+            )
+        finally:
+            progress.close()
+            self._async_operation_in_progress = False
 
     @qasync.asyncSlot()
     async def download_file(self):
         """Handle file download."""
-        async with self._async_lock:
-            try:
-                # Get selected file
-                selected_items = self.file_list.selectedItems()
-                if not selected_items:
-                    QMessageBox.warning(
-                        self,
-                        "Warning",
-                        "Please select a file to download"
-                    )
-                    return
-                
-                file_info = selected_items[0].data(Qt.ItemDataRole.UserRole)
-                
-                # Get save location
-                save_path, _ = QFileDialog.getSaveFileName(
+        if self._async_operation_in_progress:
+            self.logger.info("File download operation already in progress")
+            return
+            
+        self._async_operation_in_progress = True
+        try:
+            # Get selected file
+            selected_items = self.file_list.selectedItems()
+            if not selected_items:
+                QMessageBox.warning(
                     self,
-                    "Save File",
-                    file_info.name,
-                    "All Files (*.*)"
+                    "Warning",
+                    "Please select a file to download"
+                )
+                self._async_operation_in_progress = False
+                return
+            
+            file_info = selected_items[0].data(Qt.ItemDataRole.UserRole)
+            
+            # Get save location
+            save_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save File",
+                file_info.name,
+                "All Files (*.*)"
+            )
+            
+            if not save_path:
+                self._async_operation_in_progress = False
+                return
+            
+            # Show progress dialog
+            progress = QProgressDialog("Downloading file...", "Cancel", 0, 100, self)
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+            progress.setAutoClose(True)
+            progress.show()
+            
+            try:
+                # Start download
+                transfer = await self.file_manager.start_file_transfer(
+                    file_info.file_id,
+                    save_path,
+                    self.user_id
                 )
                 
-                if not save_path:
-                    return
+                # Update progress
+                while not transfer.is_complete:
+                    progress.setValue(int(transfer.progress * 100))
+                    await asyncio.sleep(0.1)
                 
-                # Show progress dialog
-                progress = QProgressDialog("Downloading file...", "Cancel", 0, 100, self)
-                progress.setWindowModality(Qt.WindowModality.WindowModal)
-                progress.setAutoClose(True)
-                progress.show()
+                progress.setValue(100)
                 
-                try:
-                    # Start download
-                    transfer = await self.file_manager.start_file_transfer(
-                        file_info.file_id,
-                        save_path,
-                        self.user_id
-                    )
-                    
-                    # Update progress
-                    while not transfer.is_complete:
-                        progress.setValue(int(transfer.progress * 100))
-                        await asyncio.sleep(0.1)
-                    
-                    progress.setValue(100)
-                    
-                    # Show success message
-                    QMessageBox.information(
-                        self,
-                        "Success",
-                        "File downloaded successfully!"
-                    )
-                except Exception as e:
-                    self.logger.error(f"Error downloading file: {e}")
-                    QMessageBox.critical(
-                        self,
-                        "Error",
-                        f"Failed to download file: {str(e)}"
-                    )
-                finally:
-                    progress.close()
-                
+                # Show success message
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    "File downloaded successfully!"
+                )
             except Exception as e:
-                self.logger.error(f"Error in download_file: {e}")
+                self.logger.error(f"Error downloading file: {e}")
                 QMessageBox.critical(
                     self,
                     "Error",
                     f"Failed to download file: {str(e)}"
                 )
+            finally:
+                progress.close()
+            
+        except Exception as e:
+            self.logger.error(f"Error in download_file: {e}")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to download file: {str(e)}"
+            )
+        finally:
+            self._async_operation_in_progress = False
 
     def delete_file(self, item=None, file_info=None):
         """Handle file deletion."""
+        if self._async_operation_in_progress:
+            self.logger.info("File deletion operation already in progress")
+            return
+            
+        self._async_operation_in_progress = True
         try:
             # Get file info
             if not item and not file_info:
                 selected_items = self.file_list.selectedItems()
                 if not selected_items:
                     self.show_warning("Please select a file to delete")
+                    self._async_operation_in_progress = False
                     return
                 item = selected_items[0]
                 file_data = item.data(0, Qt.ItemDataRole.UserRole)
                 if not file_data:
                     self.show_error("No file data found")
+                    self._async_operation_in_progress = False
                     return
                 file_id = file_data.file_id
             else:
@@ -446,6 +467,7 @@ class MainWindow(QMainWindow):
                     file_id = file_info['file_id']
                 else:
                     self.show_error("Invalid file info format")
+                    self._async_operation_in_progress = False
                     return
             
             # Confirm deletion
@@ -458,9 +480,6 @@ class MainWindow(QMainWindow):
             )
             
             if reply == QMessageBox.StandardButton.Yes:
-                # Stop the update timer to prevent qasync conflicts
-                self.update_timer.stop()
-                
                 # Show progress dialog
                 progress = QProgressBar()
                 progress.setRange(0, 0)  # Indeterminate progress
@@ -476,34 +495,46 @@ class MainWindow(QMainWindow):
             
         except Exception as e:
             self.show_error(f"Error deleting file: {str(e)}")
+        finally:
+            self._async_operation_in_progress = False
 
     @qasync.asyncSlot()
     async def _delete_file_async(self, file_id: str, progress_dialog: QMessageBox):
         """Asynchronously delete a file."""
-        async with self._async_lock:
+        if self._async_operation_in_progress:
+            self.logger.info("File deletion operation already in progress")
+            return
+            
+        self._async_operation_in_progress = True
+        try:
             self.logger.debug(f"[qasync] Starting delete for file_id: {file_id}")
-            try:
-                # Delete the file
-                success = await self.file_manager.delete_file(file_id, self.user_id)
+            # Delete the file
+            success = await self.file_manager.delete_file(file_id, self.user_id)
+            
+            if success:
+                self.show_info("File deleted successfully")
+                # Update file list
+                self._update_file_list_direct()
+            else:
+                self.show_error("Failed to delete file")
                 
-                if success:
-                    self.show_info("File deleted successfully")
-                    # Update file list
-                    self._update_file_list_direct()
-                else:
-                    self.show_error("Failed to delete file")
-                    
-            except Exception as e:
-                self.logger.error(f"Error deleting file: {e}")
-                self.show_error(f"Error deleting file: {str(e)}")
-            finally:
-                # Close progress dialog
-                progress_dialog.close()
-                # Restart the update timer
-                self.update_timer.start()
+        except Exception as e:
+            self.logger.error(f"Error deleting file: {e}")
+            self.show_error(f"Error deleting file: {str(e)}")
+        finally:
+            # Close progress dialog
+            progress_dialog.close()
+            # Restart the update timer
+            self.update_timer.start()
+            self._async_operation_in_progress = False
 
     def _update_file_list_direct(self):
         """Update file list directly from database without async calls."""
+        if self._async_operation_in_progress:
+            self.logger.info("File list update operation already in progress")
+            return
+            
+        self._async_operation_in_progress = True
         try:
             self.logger.debug("Starting direct file list update")
             
@@ -556,9 +587,15 @@ class MainWindow(QMainWindow):
             self.logger.error(f"Error in direct file list update: {e}")
             # Don't call async methods to avoid qasync conflicts
             # The UI will be updated on the next manual refresh or app restart
+        finally:
+            self._async_operation_in_progress = False
 
     def pause_transfer(self):
         """Pause a selected transfer."""
+        if self._async_operation_in_progress:
+            self.logger.info("Transfer operation already in progress")
+            return
+            
         selected_items = self.transfer_list.selectedItems()
         if not selected_items:
             self.show_warning("Please select a transfer to pause")
@@ -574,6 +611,10 @@ class MainWindow(QMainWindow):
 
     def cancel_transfer(self):
         """Cancel a selected transfer."""
+        if self._async_operation_in_progress:
+            self.logger.info("Transfer operation already in progress")
+            return
+            
         selected_items = self.transfer_list.selectedItems()
         if not selected_items:
             self.show_warning("Please select a transfer to cancel")
@@ -597,40 +638,52 @@ class MainWindow(QMainWindow):
     @qasync.asyncSlot()
     async def connect_to_peer(self):
         """Connect to a peer using the specified address."""
-        async with self._async_lock:
+        if self._async_operation_in_progress:
+            self.logger.info("Peer connection operation already in progress")
+            return
+            
+        self._async_operation_in_progress = True
+        try:
+            # Get peer address from user
+            address, ok = QInputDialog.getText(
+                self, "Connect to Peer", "Enter peer address (host:port):"
+            )
+            
+            if not ok or not address:
+                self._async_operation_in_progress = False
+                return
+                
+            # Parse address
             try:
-                # Get peer address from user
-                address, ok = QInputDialog.getText(
-                    self, "Connect to Peer", "Enter peer address (host:port):"
-                )
+                host, port_str = address.split(":")
+                port = int(port_str)
+            except ValueError:
+                self.show_error("Invalid address format. Please use host:port")
+                self._async_operation_in_progress = False
+                return
                 
-                if not ok or not address:
-                    return
-                    
-                # Parse address
-                try:
-                    host, port_str = address.split(":")
-                    port = int(port_str)
-                except ValueError:
-                    self.show_error("Invalid address format. Please use host:port")
-                    return
-                    
-                # Attempt connection using qasync
-                self.logger.info(f"Attempting to connect to peer {address}")
-                peer = await self.network_manager.connect_to_peer(host, port)
-                
-                if peer:
-                    self.show_info(f"Successfully connected to {address}")
-                    self.update_peer_list()  # Refresh peer list
-                else:
-                    self.show_error(f"Failed to connect to {address}")
-                
-            except Exception as e:
-                self.logger.error(f"Error connecting to peer: {e}")
-                self.show_error(f"Error connecting to peer: {str(e)}")
+            # Attempt connection using qasync
+            self.logger.info(f"Attempting to connect to peer {address}")
+            peer = await self.network_manager.connect_to_peer(host, port)
+            
+            if peer:
+                self.show_info(f"Successfully connected to {address}")
+                self.update_peer_list()  # Refresh peer list
+            else:
+                self.show_error(f"Failed to connect to {address}")
+            
+        except Exception as e:
+            self.logger.error(f"Error connecting to peer: {e}")
+            self.show_error(f"Error connecting to peer: {str(e)}")
+        finally:
+            self._async_operation_in_progress = False
 
     def disconnect_from_peer(self):
         """Disconnect from a selected peer."""
+        if self._async_operation_in_progress:
+            self.logger.info("Peer disconnection operation already in progress")
+            return
+            
         selected_items = self.peer_list.selectedItems()
         if not selected_items:
             self.show_warning("Please select a peer to disconnect")
@@ -643,6 +696,8 @@ class MainWindow(QMainWindow):
             self.update_peer_list()
         except Exception as e:
             self.show_error(f"Error disconnecting from peer: {e}")
+        finally:
+            self._async_operation_in_progress = False
 
     def browse_storage_path(self):
         """Open dialog to select storage path."""
@@ -685,6 +740,11 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_file_list_updating') and self._file_list_updating:
             return
             
+        # Don't update if another async operation is in progress
+        if self._async_operation_in_progress:
+            self.logger.debug("Skipping file list update - async operation in progress")
+            return
+            
         self._file_list_updating = True
         self.logger.debug("Starting file list update")
         self.logger.debug(f"Current file list item count: {self.file_list.topLevelItemCount()}")
@@ -696,19 +756,27 @@ class MainWindow(QMainWindow):
     @qasync.asyncSlot()
     async def _update_file_list_async(self):
         """Asynchronously update the file list."""
-        async with self._async_lock:
-            self.logger.debug("[qasync] Entered _update_file_list_async")
-            try:
-                files = await self.file_manager.get_shared_files()
-                self.logger.debug(f"[qasync] Got {len(files)} files from get_shared_files")
-                self._update_file_list_ui(files)
-            except Exception as e:
-                self.logger.error(f"Error in async file list update: {e}", exc_info=True)
-            finally:
-                self._file_list_updating = False
+        if self._async_operation_in_progress:
+            self.logger.info("File list update operation already in progress")
+            return
+            
+        self._async_operation_in_progress = True
+        try:
+            files = await self.file_manager.get_shared_files()
+            self.logger.debug(f"[qasync] Got {len(files)} files from get_shared_files")
+            self._update_file_list_ui(files)
+        except Exception as e:
+            self.logger.error(f"Error in async file list update: {e}", exc_info=True)
+        finally:
+            self._file_list_updating = False
+            self._async_operation_in_progress = False
 
     def _update_file_list_ui(self, files):
         """Update the file list widget with file data."""
+        if self._async_operation_in_progress:
+            self.logger.info("File list update operation already in progress")
+            return
+            
         try:
             self.logger.debug("Starting UI update in main thread")
             
@@ -795,6 +863,10 @@ class MainWindow(QMainWindow):
 
     def update_peer_list(self):
         """Update the peer list display."""
+        if self._async_operation_in_progress:
+            self.logger.info("Peer list update operation already in progress")
+            return
+            
         try:
             self.logger.info("Starting peer list update")
             self.peer_list.clear()
@@ -855,6 +927,10 @@ class MainWindow(QMainWindow):
 
     def cleanup(self):
         """Clean up resources before closing."""
+        if self._async_operation_in_progress:
+            self.logger.info("Cleanup operation already in progress")
+            return
+            
         try:
             # Stop all transfers
             self.file_manager.cancel_all_transfers()
