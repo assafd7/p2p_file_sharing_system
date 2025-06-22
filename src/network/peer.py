@@ -233,10 +233,38 @@ class Peer:
             self.logger.error(f"Error sending message: {e}")
             return False
 
+    async def request_file_chunk(self, file_id: str, chunk_index: int):
+        """Requests a specific chunk of a file from the peer."""
+        if not self.is_connected:
+            self.logger.error("Cannot request chunk: not connected")
+            return
+            
+        self.logger.debug(f"Requesting chunk {chunk_index} for file {file_id} from {self.id}")
+        message = Message(
+            type=MessageType.CHUNK_REQUEST,
+            sender_id=self.id, # This should be our own ID
+            payload={'file_id': file_id, 'chunk_index': chunk_index}
+        )
+        await self.send_message(message)
+
+    async def send_file_chunk(self, file_id: str, chunk_index: int, chunk_data: bytes):
+        """Sends a specific chunk of a file to the peer."""
+        if not self.is_connected:
+            self.logger.error("Cannot send chunk: not connected")
+            return
+            
+        self.logger.debug(f"Sending chunk {chunk_index} for file {file_id} to {self.id}")
+        message = Message(
+            type=MessageType.CHUNK_RESPONSE,
+            sender_id=self.id, # This should be our own ID
+            payload={'file_id': file_id, 'chunk_index': chunk_index, 'data': chunk_data}
+        )
+        await self.send_message(message)
+
     async def read_message(self) -> Optional[Message]:
         """Read a message from the peer with detailed validation."""
-        if not self.is_connected:
-            self.logger.debug("Cannot read message: not connected")
+        if not self.is_connected or self.reader is None:
+            self.logger.debug("Cannot read message: not connected or reader is None")
             return None
             
         try:
@@ -273,17 +301,13 @@ class Peer:
                 self.logger.error(f"Message length {message_length} exceeds maximum size {MAX_MESSAGE_SIZE}")
                 return None
                 
-            # Step 4: Read message data with shorter timeout
-            self.logger.debug(f"Step 4: Reading message data ({message_length} bytes)")
-            try:
-                message_data = await asyncio.wait_for(
-                    self.reader.read(message_length),
-                    timeout=2.0  # Reduced timeout to prevent blocking
-                )
-            except asyncio.TimeoutError:
-                self.logger.debug(f"Timeout reading message data after 2 seconds")
-                return None
-                
+            # Step 4: Read message body
+            self.logger.debug(f"Step 4: Reading message body of size {message_length}")
+            message_data = await asyncio.wait_for(
+                self.reader.read(message_length),
+                timeout=self.read_timeout
+            )
+            
             if not message_data:
                 self.logger.debug("No data received when reading message")
                 return None

@@ -10,16 +10,66 @@ from pathlib import Path
 import time
 import shutil
 import uuid
+from queue import Queue
 
 from src.database.db_manager import DatabaseManager
 from src.file_management.file_transfer import FileTransfer
 from src.file_management.file_metadata import FileMetadata, FileMetadataManager, FileChunk
 from src.network.dht import DHT
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal, QThread
 
 class FileManagerError(Exception):
     """Exception raised for file manager errors."""
     pass
+
+class FileProcessingWorker(QThread):
+    """A dedicated QThread to process file sharing jobs in the background."""
+    def __init__(self, queue: Queue, main_loop: asyncio.AbstractEventLoop, file_manager: 'FileManager'):
+        super().__init__()
+        self._queue = queue
+        self._loop = main_loop
+        self._file_manager = file_manager
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self._is_running = True
+
+    def run(self):
+        """The main loop for the worker thread."""
+        self.logger.info("File processing worker thread started.")
+        while self._is_running:
+            try:
+                # Blocking get from the queue
+                job = self._queue.get()
+                if job is None:  # Sentinel to stop
+                    self._is_running = False
+                    continue
+
+                file_path, owner_id, owner_name = job
+                self.logger.info(f"Worker picked up job: {file_path}")
+
+                # Submit the async processing to the main event loop from this thread
+                future = asyncio.run_coroutine_threadsafe(
+                    self._file_manager._process_share_job(file_path, owner_id, owner_name),
+                    self._loop
+                )
+                
+                # Optionally, you can wait for the result or handle exceptions
+                future.add_done_callback(self._on_job_done)
+
+            except Exception as e:
+                self.logger.error(f"Error in worker thread loop: {e}", exc_info=True)
+        self.logger.info("File processing worker thread stopped.")
+
+    def _on_job_done(self, future: asyncio.Future):
+        """Callback executed when a submitted coroutine is done."""
+        try:
+            future.result() # This will raise any exception that occurred in the coroutine
+        except Exception as e:
+            self.logger.error(f"Async file processing job failed: {e}", exc_info=True)
+            self.file_add_failed_signal.emit(f"Failed to share file: {str(e)}")
+
+    def stop(self):
+        self._is_running = False
+        self._queue.put(None) # Unblock the queue.get() if it's waiting
 
 class FileManager(QObject):
     """Manages file operations in the P2P file sharing system."""
@@ -48,65 +98,53 @@ class FileManager(QObject):
         self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
-        # Queue for processing file sharing requests
-        self._sharing_queue = asyncio.Queue()
-        self._worker_task = None
+        # Use a standard thread-safe queue
+        self._sharing_queue = Queue()
+        self._worker_thread = None
     
     def start(self):
-        """Starts the file manager's background worker tasks."""
-        self.logger.info("Starting FileManager background worker.")
-        self._worker_task = asyncio.create_task(self._process_sharing_queue())
+        """Starts the file manager's background worker thread."""
+        if self._worker_thread is None:
+            self.logger.info("Starting FileManager worker thread.")
+            self._worker_thread = FileProcessingWorker(
+                self._sharing_queue, asyncio.get_running_loop(), self
+            )
+            self._worker_thread.start()
 
-    async def stop(self):
-        """Stops the file manager's background worker tasks."""
-        self.logger.info("Stopping FileManager background worker.")
-        if self._worker_task:
-            self._sharing_queue.put_nowait(None) # Sentinel to stop the worker
-            try:
-                await self._worker_task
-            except asyncio.CancelledError:
-                pass
-        self.logger.info("FileManager worker stopped.")
+    def stop(self):
+        """Stops the file manager's background worker thread."""
+        if self._worker_thread and self._worker_thread.isRunning():
+            self.logger.info("Stopping FileManager worker thread.")
+            self._worker_thread.stop()
+            self._worker_thread.wait() # Wait for the thread to finish
+        self.logger.info("FileManager stopped.")
 
     def share_file_in_background(self, file_path: str, owner_id: str, owner_name: str):
-        """Public method for the UI to request a file to be shared."""
+        """Public method for the UI to queue a file for sharing."""
         try:
+            # Use the standard queue's put_nowait
             self._sharing_queue.put_nowait((file_path, owner_id, owner_name))
             self.logger.info(f"Queued file for sharing: {file_path}")
-        except asyncio.QueueFull:
+        except Exception: # queue.Full is the exception here
             self.logger.error("Sharing queue is full. Cannot share file at the moment.")
             self.file_add_failed_signal.emit("Processing queue is full. Please try again later.")
 
-    async def _process_sharing_queue(self):
-        """The worker that processes file sharing requests from the queue."""
-        self.logger.info("File sharing worker started.")
-        while True:
-            job = await self._sharing_queue.get()
-            if job is None: # Sentinel value to stop the loop
-                break
-
-            file_path, owner_id, owner_name = job
-            self.logger.info(f"Processing share request for: {file_path}")
+    async def _process_share_job(self, file_path: str, owner_id: str, owner_name: str) -> None:
+        """The async part of processing a share job. Called by the worker."""
+        self.logger.info(f"Processing share request for: {file_path}")
+        try:
+            metadata = await self._add_file_locally(file_path, owner_id, owner_name)
             
-            try:
-                # 1. Perform all local processing (hashing, DB write)
-                metadata = await self._add_file_locally(file_path, owner_id, owner_name)
-                
-                # 2. Schedule the network broadcast safely
-                if self.dht and metadata:
-                    self.dht.schedule_metadata_broadcast(metadata)
+            if self.dht and metadata:
+                self.dht.schedule_metadata_broadcast(metadata)
 
-                # 3. Signal the UI that the file was added successfully
-                if metadata:
-                    self.file_added_signal.emit(metadata.to_dict())
-                    self.logger.info(f"Successfully processed and shared file: {metadata.name}")
+            if metadata:
+                self.file_added_signal.emit(metadata.to_dict())
+                self.logger.info(f"Successfully processed and shared file: {metadata.name}")
 
-            except Exception as e:
-                self.logger.error(f"Failed to process share request for {file_path}: {e}", exc_info=True)
-                self.file_add_failed_signal.emit(f"Failed to share {os.path.basename(file_path)}: {e}")
-            finally:
-                self._sharing_queue.task_done()
-        self.logger.info("File sharing worker stopped.")
+        except Exception as e:
+            self.logger.error(f"Failed to process share request for {file_path}: {e}", exc_info=True)
+            self.file_add_failed_signal.emit(f"Failed to share {os.path.basename(file_path)}: {str(e)}")
 
     async def _add_file_locally(self, file_path: str, owner_id: str, owner_name: str) -> Optional[FileMetadata]:
         """Adds a file to the system for sharing (without broadcasting)."""
@@ -226,62 +264,53 @@ class FileManager(QObject):
         return self.storage_dir / file_id
     
     async def get_shared_files(self) -> List[FileMetadata]:
-        """Get all shared files from the database"""
+        """Retrieves a list of all shared files from the database."""
         self.logger.debug("[get_shared_files] Starting get_shared_files")
+        
         try:
-            self.logger.debug("[get_shared_files] Calling db_manager.get_all_files()")
-            files = await self.db_manager.get_all_files()
-            self.logger.debug(f"[get_shared_files] Raw files list length: {len(files)}")
-            metadata_list = []
-            for file_data in files:
-                try:
-                    self.logger.debug(f"[get_shared_files] Processing file data: {file_data}")
-                    is_available = bool(file_data.get('is_available', True))
-                    ttl = int(file_data.get('ttl', 10))
-                    seen_by = file_data.get('seen_by')
-                    if seen_by is None:
-                        seen_by = []
-                    elif isinstance(seen_by, str):
-                        seen_by = json.loads(seen_by)
-                    chunks = file_data.get('chunks')
-                    if chunks is None:
-                        chunks = []
-                    elif isinstance(chunks, str):
-                        chunks = json.loads(chunks)
-                    metadata = FileMetadata(
-                        file_id=file_data['file_id'],
-                        name=file_data['name'],
-                        size=file_data['size'],
-                        hash=file_data['hash'],
-                        owner_id=file_data['owner_id'],
-                        owner_name=file_data['owner_name'],
-                        upload_time=datetime.fromisoformat(file_data['upload_time']),
-                        is_available=is_available,
-                        ttl=ttl,
-                        seen_by=set(seen_by),
-                        chunks=[FileChunk(**chunk) for chunk in chunks]
-                    )
-                    self.logger.debug(f"[get_shared_files] Created metadata object: {metadata}")
-                    metadata_list.append(metadata)
-                except Exception as e:
-                    self.logger.error(f"[get_shared_files] Error processing file data: {file_data}\nException: {str(e)}", exc_info=True)
+            raw_files = await self.db_manager.get_all_files()
+            self.logger.debug(f"[get_shared_files] Raw files list length: {len(raw_files)}")
+            
+            files = []
+            for file_data in raw_files:
+                self.logger.debug(f"[get_shared_files] Processing file data: {file_data}")
+                
+                # Ensure 'metadata' key exists and is a dictionary
+                metadata_dict = file_data.get('metadata')
+                if isinstance(metadata_dict, str):
+                    try:
+                        metadata_dict = json.loads(metadata_dict)
+                    except json.JSONDecodeError:
+                        self.logger.error(f"Could not decode metadata JSON for file_id {file_data.get('file_id')}")
+                        continue
+                
+                if not isinstance(metadata_dict, dict):
+                    self.logger.error(f"Invalid or missing metadata for file_id {file_data.get('file_id')}")
                     continue
-            self.logger.debug(f"[get_shared_files] Returning {len(metadata_list)} metadata objects")
-            return metadata_list
+
+                try:
+                    metadata_obj = FileMetadata.from_dict(metadata_dict)
+                    files.append(metadata_obj)
+                    self.logger.debug(f"[get_shared_files] Created metadata object: {metadata_obj}")
+                except Exception as e:
+                    self.logger.error(f"Error creating FileMetadata object from dict for file_id {file_data.get('file_id')}: {e}")
+
+            self.logger.debug(f"[get_shared_files] Returning {len(files)} metadata objects")
+            return files
         except Exception as e:
-            self.logger.error(f"[get_shared_files] Error in get_shared_files: {str(e)}", exc_info=True)
+            self.logger.error(f"An unexpected error occurred in get_shared_files: {e}", exc_info=True)
             return []
     
     async def get_file_metadata(self, file_id: str) -> Optional[FileMetadata]:
-        """Get metadata for a specific file."""
+        """Retrieves metadata for a single file by its ID."""
         return await self.metadata_manager.get_metadata(file_id)
     
-    def get_transfer_status(self, transfer_id: str) -> Optional[Tuple[float, str]]:
-        """Get the status of a file transfer."""
-        transfer = self.active_transfers.get(transfer_id)
-        if not transfer:
-            return None
-        return transfer.get_status()
+    def get_transfer_status(self, file_id: str) -> Optional[dict]:
+        """Gets the status of an active transfer."""
+        transfer = self.active_transfers.get(file_id)
+        if transfer:
+            return transfer.get_status()
+        return None
     
     async def start_file_transfer(self, file_id: str, target_path: str, user_id: str) -> str:
         """Start a file transfer.
@@ -325,31 +354,12 @@ class FileManager(QObject):
             self.logger.error(f"Error starting transfer: {e}")
             raise FileManagerError(f"Failed to start transfer: {e}")
     
-    def cancel_transfer(self, transfer_id: str, user_id: str) -> bool:
-        """Cancel an active file transfer.
-        
-        Args:
-            transfer_id: ID of the transfer to cancel
-            user_id: ID of the user requesting cancellation
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            transfer = self.active_transfers.get(transfer_id)
-            if not transfer:
-                raise FileManagerError("Transfer not found")
-            
-            # Cancel transfer
-            transfer.cancel()
-            del self.active_transfers[transfer_id]
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error cancelling transfer: {e}")
-            raise FileManagerError(f"Failed to cancel transfer: {e}")
-    
+    def cancel_transfer(self, file_id: str):
+        """Cancels an active file transfer."""
+        if file_id in self.active_transfers:
+            self.active_transfers[file_id].cancel()
+            del self.active_transfers[file_id]
+
     def get_active_transfers(self) -> List[FileTransfer]:
         """Get list of active transfers."""
         return list(self.active_transfers.values())
