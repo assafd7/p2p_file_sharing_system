@@ -452,7 +452,7 @@ class MainWindow(QMainWindow):
             else:
                 # Handle both FileMetadata objects and dictionaries
                 if hasattr(file_info, 'file_id'):
-                    file_id = file_info.file_id
+                file_id = file_info.file_id
                 elif isinstance(file_info, dict) and 'file_id' in file_info:
                     file_id = file_info['file_id']
                 else:
@@ -491,22 +491,22 @@ class MainWindow(QMainWindow):
     @qasync.asyncSlot()
     async def _delete_file_async(self, file_id: str, progress_dialog: QMessageBox):
         """Asynchronously delete a file."""
-        try:
+                    try:
             self.logger.debug(f"[qasync] Starting delete for file_id: {file_id}")
-            success = await self.file_manager.delete_file(file_id, self.user_id)
-            if success:
-                self.show_info("File deleted successfully")
+                        success = await self.file_manager.delete_file(file_id, self.user_id)
+                        if success:
+                            self.show_info("File deleted successfully")
                 # Update UI synchronously to avoid qasync conflicts
                 self._update_file_list_direct()
-            else:
-                self.show_error("Failed to delete file")
-        except Exception as e:
+                        else:
+                            self.show_error("Failed to delete file")
+                    except Exception as e:
             self.logger.error(f"Error in async delete: {e}", exc_info=True)
-            self.show_error(f"Error deleting file: {str(e)}")
-        finally:
+                        self.show_error(f"Error deleting file: {str(e)}")
+                    finally:
             # Ensure progress dialog is closed
             if progress_dialog and not progress_dialog.isHidden():
-                progress_dialog.close()
+                        progress_dialog.close()
                 progress_dialog.deleteLater()
             
             # Restart the update timer
@@ -555,7 +555,7 @@ class MainWindow(QMainWindow):
                         chunks=[FileChunk(**chunk) for chunk in chunks]
                     )
                     files.append(metadata)
-                except Exception as e:
+        except Exception as e:
                     self.logger.error(f"Error processing file data: {e}")
                     continue
             
@@ -622,7 +622,7 @@ class MainWindow(QMainWindow):
             except ValueError:
                 self.show_error("Invalid address format. Please use host:port")
                 return
-            
+                
             # Stop the update timer to prevent qasync conflicts
             self.update_timer.stop()
             
@@ -645,13 +645,13 @@ class MainWindow(QMainWindow):
         """Asynchronously connect to a peer."""
         try:
             self.logger.debug(f"[qasync] Starting connection to {address}")
-            success = await self.network_manager.connect_to_peer(host, port)
-            if success:
-                self.show_info(f"Successfully connected to {address}")
+                success = await self.network_manager.connect_to_peer(host, port)
+                if success:
+                    self.show_info(f"Successfully connected to {address}")
                 # Update peer list synchronously to avoid conflicts
                 self.update_peer_list()
-            else:
-                self.show_error(f"Failed to connect to {address}")
+                else:
+                    self.show_error(f"Failed to connect to {address}")
         except Exception as e:
             self.logger.error(f"Error in async peer connection: {e}", exc_info=True)
             self.show_error(f"Error connecting to peer: {str(e)}")
@@ -727,7 +727,7 @@ class MainWindow(QMainWindow):
         # Call the async slot directly
         self._update_file_list_async()
         self.logger.debug("Called async file list update")
-
+        
     @qasync.asyncSlot()
     async def _update_file_list_async(self):
         """Asynchronously update the file list."""
@@ -736,7 +736,7 @@ class MainWindow(QMainWindow):
             files = await self.file_manager.get_shared_files()
             self.logger.debug(f"[qasync] Got {len(files)} files from get_shared_files")
             self._update_file_list_ui(files)
-        except Exception as e:
+                except Exception as e:
             self.logger.error(f"Error in async file list update: {e}", exc_info=True)
         finally:
             self._file_list_updating = False
