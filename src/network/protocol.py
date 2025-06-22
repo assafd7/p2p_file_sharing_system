@@ -24,6 +24,8 @@ class MessageType(Enum):
     FILE_METADATA_RESPONSE = "file_metadata_response"  # Response with file metadata
     CHUNK_REQUEST = "chunk_request"
     CHUNK_RESPONSE = "chunk_response"
+    STORE = "store"
+    FIND_VALUE = "find_value"
 
 @dataclass
 class Message:

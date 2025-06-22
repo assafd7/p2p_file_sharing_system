@@ -1,7 +1,7 @@
 import hashlib
 import time
 import asyncio
-from typing import Dict, List, Set, Optional, Tuple
+from typing import Dict, List, Set, Optional, Tuple, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
@@ -16,75 +16,60 @@ class DHTError(Exception):
 
 @dataclass
 class KBucket:
-    nodes: List[PeerInfo]
+    nodes: List[PeerInfo] = field(default_factory=list)
     last_updated: datetime = field(default_factory=datetime.now)
-    k: int = 20  # Maximum number of nodes per bucket
+    k: int = 20
 
-    def __post_init__(self):
-        if not self.nodes:
-            self.nodes = []
-
-    def add_node(self, node: PeerInfo) -> bool:
-        """Add a node to the bucket if there's space or if it's closer than existing nodes."""
-        if len(self.nodes) < self.k:
-            self.nodes.append(node)
-            self.last_updated = datetime.now()
-            return True
-        return False
-
-    def remove_node(self, node_id: str) -> bool:
-        """Remove a node from the bucket."""
-        for i, node in enumerate(self.nodes):
-            if node.id == node_id:
-                self.nodes.pop(i)
-                return True
-        return False
-
-    def update_node(self, node: PeerInfo) -> bool:
-        """Update an existing node's information."""
-        for i, existing_node in enumerate(self.nodes):
-            if existing_node.id == node.id:
-                self.nodes[i] = node
+    def add_node(self, node: PeerInfo):
+        if not any(n.id == node.id for n in self.nodes):
+            if len(self.nodes) < self.k:
+                self.nodes.append(node)
                 self.last_updated = datetime.now()
-                return True
-        return False
+            else:
+                # Handle bucket splitting or node replacement logic here
+                pass
+
+    def remove_node(self, node_id: str):
+        self.nodes = [n for n in self.nodes if n.id != node_id]
 
 class DHT:
     """Distributed Hash Table for peer discovery and routing."""
     
-    def __init__(self, host: str, port: int, bootstrap_nodes: List[Tuple[str, int]] = None, 
+    def __init__(self, host: str, port: int, bootstrap_nodes: Optional[List[Tuple[str, int]]] = None, 
                  username: str = "Anonymous", db_manager: Optional[DatabaseManager] = None):
         """Initialize the DHT network."""
         self.host = host
         self.port = port
+        self._node_id = f"{self.host}:{self.port}"
         self.bootstrap_nodes = bootstrap_nodes or []
         self.username = username
         self.db_manager = db_manager
         self.peers: Dict[str, Peer] = {}
         self.logger = logging.getLogger(__name__)
-        self._server = None
+        self._server: Optional[asyncio.AbstractServer] = None
         self._running = False
-        self._lock = asyncio.Lock()
-        self._cleanup_task = None
-        self._seen_metadata: Set[str] = set()  # Track seen metadata to prevent loops
-        self._peer_tasks: Dict[str, asyncio.Task] = {}  # Track peer message handling tasks
-        self._connection_semaphore = asyncio.Semaphore(1)  # Limit concurrent connections
+        self._connection_semaphore = asyncio.Semaphore(10)
         
-        # Initialize message handlers
+        self.k = 20
+        self.k_buckets: List[KBucket] = [KBucket() for _ in range(160)] # 160 buckets for SHA-1 hash
+
+        self.on_peer_connected: Optional[Callable[[Peer], Awaitable[None]]] = None
+        self.on_file_metadata_received: Optional[Callable[[FileMetadata], Awaitable[None]]] = None
+        self.on_chunk_request: Optional[Callable[[str, int, Peer], Awaitable[None]]] = None
+        self.on_chunk_response: Optional[Callable[[str, int, bytes, Peer], Awaitable[None]]] = None
+
         self.message_handlers = {
             MessageType.PEER_LIST: self._handle_peer_list,
-            MessageType.HEARTBEAT: self._handle_heartbeat,
             MessageType.GOODBYE: self._handle_goodbye,
-            MessageType.USER_INFO: self._handle_user_info,
             MessageType.FILE_METADATA: self._handle_file_metadata,
-            MessageType.FILE_METADATA_REQUEST: self._handle_file_metadata_request,
-            MessageType.FILE_METADATA_RESPONSE: self._handle_file_metadata_response
+            MessageType.CHUNK_REQUEST: self._handle_chunk_request,
+            MessageType.CHUNK_RESPONSE: self._handle_chunk_response,
         }
         
     @property
     def node_id(self) -> str:
         """Get the node ID (host:port)."""
-        return f"{self.host}:{self.port}"
+        return self._node_id
         
     def get_connected_peers(self) -> List[Peer]:
         """Get a list of currently connected peers."""
@@ -197,12 +182,10 @@ class DHT:
         """Register message handlers for the DHT."""
         self.message_handlers = {
             MessageType.PEER_LIST: self._handle_peer_list,
-            MessageType.HEARTBEAT: self._handle_heartbeat,
             MessageType.GOODBYE: self._handle_goodbye,
-            MessageType.USER_INFO: self._handle_user_info,
             MessageType.FILE_METADATA: self._handle_file_metadata,
-            MessageType.FILE_METADATA_REQUEST: self._handle_file_metadata_request,
-            MessageType.FILE_METADATA_RESPONSE: self._handle_file_metadata_response
+            MessageType.CHUNK_REQUEST: self._handle_chunk_request,
+            MessageType.CHUNK_RESPONSE: self._handle_chunk_response,
         }
         self.logger.debug("Registered message handlers")
             
@@ -216,22 +199,6 @@ class DHT:
         except Exception as e:
             self.logger.error(f"Error handling peer list: {e}")
 
-    async def _handle_heartbeat(self, message: Message, peer: Peer):
-        """Handle heartbeat message."""
-        try:
-            peer.update_last_seen()
-            # Send acknowledgment
-            await self.send_message(
-                Message(
-                    type=MessageType.HEARTBEAT,
-                    sender_id=self.node_id,
-                    payload={'timestamp': time.time()}
-                ),
-                peer
-            )
-        except Exception as e:
-            self.logger.error(f"Error handling heartbeat: {e}")
-
     async def _handle_goodbye(self, message: Message, peer: Peer):
         """Handle goodbye message."""
         try:
@@ -239,31 +206,6 @@ class DHT:
             await self._handle_peer_disconnect(peer)
         except Exception as e:
             self.logger.error(f"Error handling goodbye: {e}")
-
-    async def _handle_user_info(self, message: Message, peer: Peer):
-        """Handle user info message."""
-        try:
-            username = message.payload.get('username')
-            if username:
-                self.logger.info(f"Received username from peer {peer.id}: {username}")
-                # Update peer's username in database if db_manager is available
-                if self.db_manager:
-                    try:
-                        await self.db_manager.update_peer_username(peer.id, username)
-                        self.logger.info(f"Successfully updated username in database for peer {peer.id}")
-                    except Exception as e:
-                        self.logger.error(f"Database error updating username: {e}")
-                # Update peer object
-                peer.username = username
-                self.logger.info(f"Updated peer object username to: {username}")
-                # Notify UI
-                if hasattr(self, 'on_peer_updated'):
-                    self.logger.info("Notifying UI of peer update")
-                    self.on_peer_updated(peer)
-            else:
-                self.logger.warning(f"Received user info message without username from peer {peer.id}")
-        except Exception as e:
-            self.logger.error(f"Error handling user info: {e}")
 
     def get_local_peer(self) -> Optional[Peer]:
         """Get the local peer instance."""
@@ -442,7 +384,7 @@ class DHT:
         except Exception as e:
             self.logger.error(f"Error scheduling peer message task for {peer.id}: {e}")
 
-    def schedule_metadata_broadcast(self, metadata: 'FileMetadata'):
+    def schedule_metadata_broadcast(self, metadata: FileMetadata):
         """
         Safely schedules the broadcast of file metadata to run on the next
         iteration of the event loop, avoiding qasync conflicts.
@@ -517,17 +459,16 @@ class DHT:
 
     def _get_bucket_index(self, node_id: str) -> int:
         """Get the index of the k-bucket for a given node ID."""
-        # XOR the node IDs and find the first differing bit
-        xor = int(self.node_id, 16) ^ int(node_id, 16)
-        if xor == 0:
-            return 0
-        return 159 - (xor.bit_length() - 1)
+        distance = self._distance(self.node_id, node_id)
+        return distance.bit_length() - 1 if distance != 0 else 0
 
     def _distance(self, id1: str, id2: str) -> int:
         """Calculate XOR distance between two node IDs."""
-        return int(id1, 16) ^ int(id2, 16)
+        h1 = int(hashlib.sha1(id1.encode()).hexdigest(), 16)
+        h2 = int(hashlib.sha1(id2.encode()).hexdigest(), 16)
+        return h1 ^ h2
 
-    def add_node(self, node: PeerInfo) -> bool:
+    def add_node(self, node: PeerInfo):
         """Add a node to the appropriate k-bucket."""
         bucket_index = self._get_bucket_index(node.id)
         bucket = self.k_buckets[bucket_index]
@@ -910,7 +851,7 @@ class DHT:
             await self._handle_peer_disconnect(peer)
             raise
 
-    async def broadcast_file_metadata(self, metadata: 'FileMetadata'):
+    async def broadcast_file_metadata(self, metadata: FileMetadata):
         """Broadcasts file metadata to all connected peers."""
         self.logger.info(f"Broadcasting metadata for {metadata.name} to all peers.")
         try:
@@ -1070,3 +1011,17 @@ class DHT:
         except Exception as e:
             self.logger.error(f"Error retrieving metadata: {e}")
             return None
+
+    async def _handle_chunk_request(self, message: Message, peer: Peer) -> None:
+        """Handle chunk request message."""
+        file_id = message.payload.get('file_id')
+        chunk_index = message.payload.get('chunk_index')
+        # This needs to be handled by FileManager
+        self.logger.warning("Chunk request handling needs to be delegated to FileManager")
+
+    async def _handle_chunk_response(self, message: Message, peer: Peer) -> None:
+        """Handle chunk response message."""
+        file_id = message.payload.get('file_id')
+        chunk_index = message.payload.get('chunk_index')
+        # This needs to be handled by FileManager
+        self.logger.warning("Chunk response handling needs to be delegated to FileManager")
