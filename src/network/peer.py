@@ -240,11 +240,11 @@ class Peer:
             return None
             
         try:
-            # Step 1: Read length prefix
+            # Step 1: Read length prefix with shorter timeout
             self.logger.debug("Step 1: Reading message length prefix")
             length_data = await asyncio.wait_for(
                 self.reader.read(4),
-                timeout=self.read_timeout
+                timeout=0.5  # Reduced timeout to prevent blocking
             )
             
             if not length_data:
@@ -273,15 +273,15 @@ class Peer:
                 self.logger.error(f"Message length {message_length} exceeds maximum size {MAX_MESSAGE_SIZE}")
                 return None
                 
-            # Step 4: Read message data
+            # Step 4: Read message data with shorter timeout
             self.logger.debug(f"Step 4: Reading message data ({message_length} bytes)")
             try:
                 message_data = await asyncio.wait_for(
                     self.reader.read(message_length),
-                    timeout=self.read_timeout
+                    timeout=2.0  # Reduced timeout to prevent blocking
                 )
             except asyncio.TimeoutError:
-                self.logger.error(f"Timeout reading message data after {self.read_timeout} seconds")
+                self.logger.debug(f"Timeout reading message data after 2 seconds")
                 return None
                 
             if not message_data:
@@ -303,7 +303,7 @@ class Peer:
                 return None
                 
         except asyncio.TimeoutError:
-            self.logger.error(f"Timeout reading message length after {self.read_timeout} seconds")
+            self.logger.debug(f"Timeout reading message length after 0.5 seconds")
             return None
         except ConnectionResetError:
             self.logger.error("Connection reset while reading message")

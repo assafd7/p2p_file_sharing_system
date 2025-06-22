@@ -217,6 +217,7 @@ def main():
             await app_instance.cleanup()
 
     try:
+        # Run the async main function
         return loop.run_until_complete(main_async())
     except KeyboardInterrupt:
         app_instance.logger.info("Application interrupted by user")
@@ -225,7 +226,11 @@ def main():
         app_instance.logger.error(f"Fatal error: {e}", exc_info=True)
         return 1
     finally:
-        loop.close()
+        # Ensure proper cleanup
+        try:
+            loop.close()
+        except Exception as e:
+            app_instance.logger.error(f"Error closing event loop: {e}")
         app_instance.logger.info("Application exited")
 
 if __name__ == "__main__":

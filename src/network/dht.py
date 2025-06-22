@@ -119,6 +119,16 @@ class DHT:
             self.logger.error(f"Failed to start DHT network: {e}")
             raise
             
+    async def _connect_to_bootstrap_nodes(self):
+        """Connect to bootstrap nodes."""
+        self.logger.info(f"Connecting to bootstrap nodes: {self.bootstrap_nodes}")
+        for host, port in self.bootstrap_nodes:
+            try:
+                await self.connect_to_peer(host, port)
+                self.logger.info(f"Successfully connected to bootstrap node {host}:{port}")
+            except Exception as e:
+                self.logger.error(f"Failed to connect to bootstrap node {host}:{port}: {e}")
+            
     async def _periodic_cleanup(self):
         """Periodically clean up stale peers."""
         while self._running:
@@ -277,8 +287,8 @@ class DHT:
             if hasattr(self, 'on_peer_connected'):
                 self.on_peer_connected(peer)
             
-            # Handle messages from this peer
-            await self._handle_peer_messages(peer)
+            # Start message handling as a background task
+            asyncio.create_task(self._handle_peer_messages_loop(peer))
                 
         except Exception as e:
             self.logger.error(f"Error handling connection: {e}")
@@ -355,8 +365,8 @@ class DHT:
                 self.logger.info(f"Notifying UI of new peer connection: {peer_id}")
                 self.on_peer_connected(peer)
             
-            # Handle messages from this peer
-            await self._handle_peer_messages(peer)
+            # Start message handling as a background task
+            asyncio.create_task(self._handle_peer_messages_loop(peer))
                 
             return peer
             
@@ -366,6 +376,42 @@ class DHT:
         except Exception as e:
             self.logger.error(f"Error connecting to peer: {e}")
             return None
+
+    async def _handle_peer_messages_loop(self, peer: Peer):
+        """Handle messages from a peer in a continuous loop as a background task."""
+        try:
+            while peer.is_connected and not peer.is_disconnecting:
+                try:
+                    # Read message with timeout to prevent blocking
+                    message = await asyncio.wait_for(
+                        peer.read_message(),
+                        timeout=1.0  # 1 second timeout to allow event loop to process other tasks
+                    )
+                    
+                    if message:
+                        # Process message
+                        if message.type in self.message_handlers:
+                            try:
+                                await self.message_handlers[message.type](message, peer)
+                            except Exception as e:
+                                self.logger.error(f"Error handling message: {e}")
+                        else:
+                            self.logger.warning(f"No handler for message type: {message.type}")
+                    else:
+                        # No message received, continue loop
+                        await asyncio.sleep(0.1)  # Small delay to prevent busy waiting
+                        
+                except asyncio.TimeoutError:
+                    # Timeout is expected, continue loop
+                    continue
+                except Exception as e:
+                    self.logger.error(f"Error in message handling loop: {e}")
+                    break
+                    
+        except Exception as e:
+            self.logger.error(f"Error in peer message loop: {e}")
+        finally:
+            await self._handle_peer_disconnect(peer)
 
     def _get_bucket_index(self, node_id: str) -> int:
         """Get the index of the k-bucket for a given node ID."""
@@ -687,12 +733,9 @@ class DHT:
     async def _handle_peer_messages(self, peer: Peer):
         """Handle messages from a peer in a qasync-compatible way."""
         try:
-            while peer.is_connected and not peer.is_disconnecting:
-                # Read message
-                message = await peer.read_message()
-                if not message:
-                    break
-                    
+            # Read one message at a time without blocking the event loop
+            message = await peer.read_message()
+            if message:
                 # Process message
                 if message.type in self.message_handlers:
                     try:
@@ -703,9 +746,11 @@ class DHT:
                     self.logger.warning(f"No handler for message type: {message.type}")
                     
         except Exception as e:
-            self.logger.error(f"Error in message handling loop: {e}")
+            self.logger.error(f"Error in message handling: {e}")
         finally:
-            await self._handle_peer_disconnect(peer)
+            # Don't call disconnect here as it might cause recursion
+            # The peer will handle its own disconnection
+            pass
 
     async def _handle_peer_disconnect(self, peer: Peer):
         """Handle peer disconnection."""
