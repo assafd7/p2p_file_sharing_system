@@ -46,8 +46,6 @@ class TransferWorker(QThread):
 class MainWindow(QMainWindow):
     """Main window of the P2P file sharing application."""
     
-    peer_connected_signal = pyqtSignal(object)  # Pass the peer object
-    
     def __init__(self, file_manager: FileManager, network_manager: DHT,
                  db_manager: DatabaseManager, user_id: str, username: str):
         """Initialize the main window."""
@@ -121,9 +119,6 @@ class MainWindow(QMainWindow):
         
         # Initial UI update
         QTimer.singleShot(0, self.update_ui)
-
-        # Connect the signal to a lambda that defers scheduling
-        self.peer_connected_signal.connect(lambda peer: QTimer.singleShot(0, lambda: self.network_manager.schedule_peer_message_task(peer)))
 
     def setup_files_tab(self):
         """Setup the files tab with file list and controls."""
@@ -653,7 +648,8 @@ class MainWindow(QMainWindow):
         finally:
             self._async_operation_in_progress = False
             if peer:
-                self.peer_connected_signal.emit(peer)  # Emit signal only after slot is fully done
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, lambda: self.network_manager.schedule_peer_message_task(peer))
 
     async def _deferred_update_peer_list(self):
         """Update peer list after a delay to avoid task conflicts."""
