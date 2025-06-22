@@ -673,7 +673,8 @@ class MainWindow(QMainWindow):
                 item = QTreeWidgetItem([file.name, str(file.size), file.owner_name or "Unknown"])
                 self.file_list.addTopLevelItem(item)
         except asyncio.CancelledError:
-            self.logger.info("update_file_list was cancelled (likely during shutdown)")
+            self.logger.info("update_file_list was cancelled (expected during shutdown or disconnect)")
+            raise
         except Exception as e:
             self.logger.error(f"Failed to update file list: {e}", exc_info=True)
 
@@ -702,7 +703,10 @@ class MainWindow(QMainWindow):
             self.logger.info(f"Received metadata for {metadata.name} from {peer.id}, updating file list.")
             self.update_file_list()
         except asyncio.CancelledError:
-            self.logger.info("on_file_metadata_received was cancelled (likely during shutdown)")
+            self.logger.info("on_file_metadata_received was cancelled (expected during shutdown or disconnect)")
+            raise
+        except Exception as e:
+            self.logger.error(f"Error in on_file_metadata_received: {e}", exc_info=True)
 
     @qasync.asyncSlot()
     async def on_peer_connected(self, peer: Peer):
@@ -710,7 +714,10 @@ class MainWindow(QMainWindow):
             self.logger.info(f"UI notified of peer connection: {peer.id}")
             self.update_peer_list()
         except asyncio.CancelledError:
-            self.logger.info("on_peer_connected was cancelled (likely during shutdown)")
+            self.logger.info("on_peer_connected was cancelled (expected during shutdown or disconnect)")
+            raise
+        except Exception as e:
+            self.logger.error(f"Error in on_peer_connected: {e}", exc_info=True)
 
     @qasync.asyncSlot()
     async def on_peer_disconnected(self, peer: Peer):
@@ -718,7 +725,10 @@ class MainWindow(QMainWindow):
             self.logger.info(f"UI notified of peer disconnect: {peer.id}")
             self.update_peer_list()
         except asyncio.CancelledError:
-            self.logger.info("on_peer_disconnected was cancelled (likely during shutdown)")
+            self.logger.info("on_peer_disconnected was cancelled (expected during shutdown or disconnect)")
+            raise
+        except Exception as e:
+            self.logger.error(f"Error in on_peer_disconnected: {e}", exc_info=True)
 
     def on_peer_updated(self, peer):
         """Handle peer update."""
