@@ -278,20 +278,29 @@ class DHT:
                 peer = Peer(reader, writer, peer_id)
                 self.peers[peer_id] = peer
                 self.add_node(PeerInfo(id=peer.id, address=peer.address, port=peer.port, last_seen=datetime.now()))
-                if self.on_peer_connected:
-                    await self.on_peer_connected(peer)
-                # Do NOT schedule peer message loop here!
+                
+                if self.on_peer_connected: await self.on_peer_connected(peer)
+                self._start_peer_message_loop(peer)
                 return peer
         except Exception as e:
             self.logger.error(f"Failed to connect to {peer_id}: {e}")
             return None
 
-    def get_peer_message_loop_coro(self, peer: Peer):
-        """
-        Return the coroutine for the peer message loop. This should be scheduled using defer_async_task
-        from outside async slots to avoid re-entrancy issues.
-        """
-        return self._handle_peer_messages_loop(peer)
+    def schedule_peer_message_task(self, peer: Peer):
+        """Schedule a peer message handling task to start after the current slot returns (qasync-safe)."""
+        try:
+            peer_id = peer.id
+            if peer_id in self._peer_tasks:
+                existing_task = self._peer_tasks[peer_id]
+                if not existing_task.done():
+                    self.logger.debug(f"Peer task for {peer_id} already exists and running")
+                    return
+            # Schedule the task to start after the current slot returns
+            loop = asyncio.get_event_loop()
+            loop.call_soon(asyncio.create_task, self._handle_peer_messages_loop(peer))
+            self.logger.debug(f"Scheduled peer message task for {peer_id}")
+        except Exception as e:
+            self.logger.error(f"Error scheduling peer message task for {peer.id}: {e}")
 
     def schedule_metadata_broadcast(self, metadata: FileMetadata):
         """

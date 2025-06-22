@@ -18,7 +18,6 @@ import qasync
 from src.file_management.file_manager import FileManager
 from src.network.dht import DHT
 from src.database.db_manager import DatabaseManager
-from src.utils.async_utils import defer_async_task
 
 class TransferWorker(QThread):
     progress_updated = pyqtSignal(str, float, str)  # transfer_id, progress, status
@@ -641,9 +640,9 @@ class MainWindow(QMainWindow):
             await asyncio.sleep(0.01)
             if peer:
                 self.show_info(f"Successfully connected to {address}")
-                # Schedule the peer message loop after the slot returns
-                defer_async_task(self.network_manager.get_peer_message_loop_coro(peer))
-                defer_async_task(self._deferred_update_peer_list())
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, lambda: self.network_manager.schedule_peer_message_task(peer))
+                asyncio.create_task(self._deferred_update_peer_list())
             else:
                 self.show_error(f"Failed to connect to {address}")
         except Exception as e:
