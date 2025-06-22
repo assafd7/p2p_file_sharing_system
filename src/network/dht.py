@@ -237,7 +237,7 @@ class DHT:
             self.add_node(PeerInfo(id=peer.id, address=peer.address, port=peer.port, last_seen=datetime.now()))
             
             if self.on_peer_connected: await self.on_peer_connected(peer)
-            self.schedule_peer_message_task(peer)
+            QTimer.singleShot(0, lambda: self.schedule_peer_message_task(peer))
             try:
                 await writer.wait_closed()
                 self.logger.info(f"[DHT] Connection to {peer_id} closed.")
@@ -271,7 +271,7 @@ class DHT:
                 self.add_node(PeerInfo(id=peer.id, address=peer.address, port=peer.port, last_seen=datetime.now()))
                 
                 if self.on_peer_connected: await self.on_peer_connected(peer)
-                self.schedule_peer_message_task(peer)
+                QTimer.singleShot(0, lambda: self.schedule_peer_message_task(peer))
                 # Do NOT start peer message loop here!
                 return peer
         except Exception as e:
