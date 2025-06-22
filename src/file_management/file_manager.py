@@ -139,7 +139,7 @@ class FileManager(QObject):
             
             if self.dht is not None and metadata is not None:
                 def schedule_task():
-                loop = asyncio.get_running_loop()
+                    loop = asyncio.get_running_loop()
                     loop.create_task(self.dht.broadcast_file_metadata(metadata))
                 QTimer.singleShot(0, schedule_task)
 

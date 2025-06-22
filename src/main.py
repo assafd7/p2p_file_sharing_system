@@ -132,7 +132,7 @@ class P2PFileSharingApp:
             assert self.db_manager is not None
             assert self.security_manager is not None
 
-            self.auth_window = AuthWindow(self.db_manager, self.security_manager)
+            self.auth_window = AuthWindow(self.db_manager, self.security_manager, event_loop=asyncio.get_event_loop())
             self.auth_window.auth_successful.connect(self.on_auth_successful)
             self.auth_window.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
             self.logger.debug("Auth window created")
@@ -175,7 +175,7 @@ class P2PFileSharingApp:
         self.logger.info("Cleaning up resources")
         try:
             if hasattr(self, 'file_manager') and self.file_manager:
-                await self.file_manager.stop()
+                self.file_manager.stop()
                 self.logger.debug("File manager stopped")
             if hasattr(self, 'dht') and self.dht:
                 await self.dht.stop()

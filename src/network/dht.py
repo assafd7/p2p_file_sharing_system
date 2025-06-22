@@ -273,9 +273,9 @@ class DHT:
         if peer.id in self._peer_tasks:
             return # Task already running
         def schedule_task():
-        task = asyncio.create_task(self._handle_peer_messages_loop(peer))
-        self._peer_tasks[peer.id] = task
-        task.add_done_callback(lambda t: self._peer_tasks.pop(peer.id, None))
+            task = asyncio.create_task(self._handle_peer_messages_loop(peer))
+            self._peer_tasks[peer.id] = task
+            task.add_done_callback(lambda t: self._peer_tasks.pop(peer.id, None))
         QTimer.singleShot(0, schedule_task)
 
     async def connect_to_peer(self, host: str, port: int) -> Optional[Peer]:
@@ -311,7 +311,7 @@ class DHT:
                     self.logger.debug(f"Peer task for {peer_id} already exists and running")
                     return
             def schedule_task():
-            loop = asyncio.get_event_loop()
+                loop = asyncio.get_event_loop()
                 loop.create_task(self._handle_peer_messages_loop(peer))
             self.logger.debug(f"Scheduled peer message task for {peer_id}")
             QTimer.singleShot(0, schedule_task)
@@ -325,7 +325,7 @@ class DHT:
         """
         self.logger.info(f"Scheduled broadcast for file: {metadata.name}")
         def schedule_task():
-        loop = asyncio.get_running_loop()
+            loop = asyncio.get_running_loop()
             loop.create_task(self.broadcast_file_metadata(metadata))
         QTimer.singleShot(0, schedule_task)
 
