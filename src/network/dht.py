@@ -295,14 +295,10 @@ class DHT:
                 if not existing_task.done():
                     self.logger.debug(f"Peer task for {peer_id} already exists and running")
                     return
-            
             # Schedule the task to start after the current slot returns
             loop = asyncio.get_event_loop()
-            loop.call_soon(
-                lambda: self._start_peer_message_loop(peer)
-            )
+            loop.call_soon(asyncio.create_task, self._handle_peer_messages_loop(peer))
             self.logger.debug(f"Scheduled peer message task for {peer_id}")
-            
         except Exception as e:
             self.logger.error(f"Error scheduling peer message task for {peer.id}: {e}")
 

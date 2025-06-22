@@ -137,7 +137,7 @@ class FileManager(QObject):
             
             if self.dht and metadata:
                 loop = asyncio.get_running_loop()
-                loop.call_soon(self.dht.schedule_metadata_broadcast, metadata)
+                loop.call_soon(asyncio.create_task, self.dht.broadcast_file_metadata(metadata))
 
             if metadata:
                 self.file_added_signal.emit(metadata.to_dict())
