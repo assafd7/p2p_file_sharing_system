@@ -443,20 +443,13 @@ class DHT:
             self.logger.error(f"Error scheduling peer message task for {peer.id}: {e}")
 
     def schedule_metadata_broadcast(self, metadata: 'FileMetadata'):
-        """Schedules a file metadata broadcast to run in the background (qasync-safe)."""
-        try:
-            loop = asyncio.get_event_loop()
-            # Use call_soon to schedule the task creation after the current UI slot returns.
-            # This is the key to avoiding the "Cannot enter into task" error.
-            loop.call_soon(
-                lambda: asyncio.create_task(
-                    self.broadcast_file_metadata(metadata),
-                    name=f"broadcast_{metadata.file_id}"
-                )
-            )
-            self.logger.info(f"Scheduled broadcast for file: {metadata.name}")
-        except Exception as e:
-            self.logger.error(f"Error scheduling metadata broadcast: {e}", exc_info=True)
+        """
+        Safely schedules the broadcast of file metadata to run on the next
+        iteration of the event loop, avoiding qasync conflicts.
+        """
+        self.logger.info(f"Scheduled broadcast for file: {metadata.name}")
+        loop = asyncio.get_running_loop()
+        loop.call_soon(asyncio.create_task, self.broadcast_file_metadata(metadata))
 
     def _cleanup_peer_task(self, peer_id: str, task: asyncio.Task):
         """Clean up peer task when it's done."""
@@ -917,8 +910,9 @@ class DHT:
             await self._handle_peer_disconnect(peer)
             raise
 
-    async def broadcast_file_metadata(self, metadata: 'FileMetadata') -> None:
-        """Broadcast file metadata to all connected peers."""
+    async def broadcast_file_metadata(self, metadata: 'FileMetadata'):
+        """Broadcasts file metadata to all connected peers."""
+        self.logger.info(f"Broadcasting metadata for {metadata.name} to all peers.")
         try:
             self.logger.info(f"Starting broadcast of file metadata: {metadata.name}")
             
