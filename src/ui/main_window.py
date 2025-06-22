@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QTabWidget, QTreeWidget, QTreeWidgetItem, QListWidgetItem, QInputDialog, QLineEdit,
     QListWidget, QProgressDialog, QSplitter, QFrame
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, pyqtSlot
 from PyQt6.QtGui import QIcon, QAction
 import logging
 from typing import Dict, List, Optional
@@ -109,6 +109,13 @@ class MainWindow(QMainWindow):
         
         # File list update control
         self._file_list_updating = False
+        
+        # Connect FileManager signals to UI slots
+        self.file_manager.file_added_signal.connect(self.on_file_shared_successfully)
+        self.file_manager.file_add_failed_signal.connect(self.on_file_share_failed)
+
+        # Start the background worker
+        self.file_manager.start()
         
         # Initial UI update
         QTimer.singleShot(0, self.update_ui)
@@ -290,17 +297,12 @@ class MainWindow(QMainWindow):
             # Pass the file info directly instead of the item
             self.delete_file(file_info=file_info)
 
-    @qasync.asyncSlot()
-    async def share_file(self):
-        """Handle file sharing."""
+    def share_file(self):
+        """Handle file sharing by showing a dialog and queueing the work."""
         if self._async_operation_in_progress:
-            self.logger.info("File sharing operation already in progress")
+            self.show_warning("Please wait for the current operation to complete.")
             return
             
-        self._async_operation_in_progress = True
-        self.logger.info("Starting file sharing process")
-        
-        # Get file path from user
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select File to Share",
@@ -310,51 +312,26 @@ class MainWindow(QMainWindow):
         
         if not file_path:
             self.logger.info("File selection cancelled")
-            self._async_operation_in_progress = False
             return
             
-        self.logger.info(f"Selected file: {file_path}")
-        
-        # Show progress dialog
-        progress = QProgressDialog("Adding file...", "Cancel", 0, 0, self)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setWindowTitle("Adding File")
-        progress.setMinimumDuration(0)
-        progress.show()
-        
-        try:
-            # Add file using qasync
-            metadata = await self.file_manager.add_file(
-                file_path,
-                self.user_id,
-                self.username
-            )
-            
-            if metadata:
-                self.logger.info(f"File added successfully: {metadata.name}")
-                self.update_file_list()
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    f"File {metadata.name} has been shared successfully!"
-                )
-            else:
-                self.logger.error("Failed to add file: No metadata returned")
-                QMessageBox.critical(
-                    self,
-                    "Error",
-                    "Failed to share file. Please try again."
-                )
-        except Exception as e:
-            self.logger.error(f"Error adding file: {e}")
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Failed to share file: {str(e)}"
-            )
-        finally:
-            progress.close()
-            self._async_operation_in_progress = False
+        # Show immediate feedback
+        self.show_info(f"Processing '{os.path.basename(file_path)}' for sharing in the background.")
+
+        # Queue the file for processing in the background. This is non-blocking.
+        self.file_manager.share_file_in_background(file_path, self.user_id, self.username)
+
+    @pyqtSlot(dict)
+    def on_file_shared_successfully(self, metadata_dict):
+        """Handle successful file sharing feedback."""
+        self.logger.info(f"Signal received: file shared successfully: {metadata_dict.get('name')}")
+        self.show_info(f"File '{metadata_dict.get('name')}' has been shared successfully!")
+        self.update_file_list()
+
+    @pyqtSlot(str)
+    def on_file_share_failed(self, error_message):
+        """Handle failed file sharing feedback."""
+        self.logger.error(f"Signal received: file share failed: {error_message}")
+        self.show_error(error_message)
 
     @qasync.asyncSlot()
     async def download_file(self):
@@ -643,49 +620,46 @@ class MainWindow(QMainWindow):
             return
             
         self._async_operation_in_progress = True
+        peer = None
         try:
-            # Get peer address from user
             address, ok = QInputDialog.getText(
                 self, "Connect to Peer", "Enter peer address (host:port):"
             )
-            
             if not ok or not address:
-                self._async_operation_in_progress = False
                 return
-                
-            # Parse address
             try:
                 host, port_str = address.split(":")
                 port = int(port_str)
             except ValueError:
                 self.show_error("Invalid address format. Please use host:port")
-                self._async_operation_in_progress = False
                 return
-                
-            # Attempt connection using qasync with proper task management
             self.logger.info(f"Attempting to connect to peer {address}")
-            
-            # Use a small delay to ensure the UI event loop has time to process
             await asyncio.sleep(0.01)
-            
             peer = await self.network_manager.connect_to_peer(host, port)
-            
-            # Add another small delay to allow the connection to stabilize
             await asyncio.sleep(0.01)
-            
-            if peer:
+            if peer and peer.is_connected:
                 self.show_info(f"Successfully connected to {address}")
-                # Update peer list after a short delay to allow the connection to be established
-                await asyncio.sleep(0.1)
-                self.update_peer_list()  # Refresh peer list
+                asyncio.create_task(self._deferred_update_peer_list())
             else:
                 self.show_error(f"Failed to connect to {address}")
-            
         except Exception as e:
             self.logger.error(f"Error connecting to peer: {e}")
             self.show_error(f"Error connecting to peer: {str(e)}")
         finally:
             self._async_operation_in_progress = False
+            if peer and peer.is_connected:
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, lambda: self.network_manager.schedule_peer_message_task(peer))
+
+    async def _deferred_update_peer_list(self):
+        """Update peer list after a delay to avoid task conflicts."""
+        try:
+            # Wait a bit for the connection to fully establish
+            await asyncio.sleep(0.2)
+            # Update peer list in the main thread
+            self.update_peer_list()
+        except Exception as e:
+            self.logger.error(f"Error in deferred peer list update: {e}")
 
     def disconnect_from_peer(self):
         """Disconnect from a selected peer."""
@@ -877,7 +851,7 @@ class MainWindow(QMainWindow):
             return
             
         try:
-            self.logger.info("Starting peer list update")
+            self.logger.info(f"[UI] Updating peer list. Current peers: {list(self.network_manager.peers.keys())}")
             self.peer_list.clear()
             
             # Get connected peers
@@ -912,7 +886,7 @@ class MainWindow(QMainWindow):
             # Resize columns to fit content
             for i in range(self.peer_list.columnCount()):
                 self.peer_list.resizeColumnToContents(i)
-            self.logger.info("Completed peer list update")
+            self.logger.info(f"[UI] Peer list update complete. Displayed peers: {self.peer_list.topLevelItemCount()}")
         except Exception as e:
             self.logger.error(f"Error updating peer list: {e}")
 
@@ -958,9 +932,14 @@ class MainWindow(QMainWindow):
             self.show_error(f"Error during cleanup: {e}")
 
     def closeEvent(self, event):
-        """Handle window close event."""
+        """Handle the window closing event."""
+        self.logger.info("Main window is closing. Cleaning up...")
         self.cleanup()
-        event.accept() 
+        # Schedule the file manager stop, but don't block the UI thread
+        if self.file_manager:
+            loop = asyncio.get_event_loop()
+            loop.create_task(self.file_manager.stop())
+        super().closeEvent(event)
 
     def show_error(self, message):
         QMessageBox.critical(self, "Error", str(message))
@@ -1000,8 +979,8 @@ class MainWindow(QMainWindow):
         # Implementation of on_transfer_completed method
         pass
 
-    def on_file_metadata_received(self, metadata):
+    async def on_file_metadata_received(self, metadata, peer):
         """Handle received file metadata."""
-        self.logger.info(f"Received file metadata: {metadata.name}")
+        self.logger.info(f"Received file metadata: {metadata.name} from peer {getattr(peer, 'id', 'unknown')}")
         # Schedule UI update in the main thread
         QTimer.singleShot(0, self.update_file_list) 

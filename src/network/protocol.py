@@ -22,6 +22,11 @@ class MessageType(Enum):
     FILE_METADATA = "file_metadata"  # New message type for file metadata
     FILE_METADATA_REQUEST = "file_metadata_request"  # Request for file metadata
     FILE_METADATA_RESPONSE = "file_metadata_response"  # Response with file metadata
+    CHUNK_REQUEST = "chunk_request"
+    CHUNK_RESPONSE = "chunk_response"
+    STORE = "store"
+    FIND_VALUE = "find_value"
+    FIND_NODE = "find_node"
 
 @dataclass
 class Message:
@@ -67,6 +72,9 @@ class Message:
     def serialize(self) -> bytes:
         """Serialize the message to bytes."""
         try:
+            if self.type is None:
+                raise ValueError("Cannot serialize message without a type")
+
             self.logger.debug(f"Serializing message: type={self.type}, sender={self.sender_id}")
             data = {
                 'type': self.type.value,  # Use the enum value
