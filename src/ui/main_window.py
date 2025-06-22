@@ -675,6 +675,8 @@ class MainWindow(QMainWindow):
             
             if peer:
                 self.show_info(f"Successfully connected to {address}")
+                # Schedule peer message task after the slot returns (qasync-safe)
+                self.network_manager.schedule_peer_message_task(peer)
                 # Defer peer list update to avoid task conflicts
                 asyncio.create_task(self._deferred_update_peer_list())
             else:

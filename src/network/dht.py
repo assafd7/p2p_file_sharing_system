@@ -301,20 +301,19 @@ class DHT:
             
             # Notify UI
             if hasattr(self, 'on_peer_connected'):
+                self.logger.info(f"Notifying UI of new peer connection: {peer_id}")
                 self.on_peer_connected(peer)
             
-            # Start message handling as a background task with proper tracking
-            task = asyncio.create_task(self._handle_peer_messages_loop(peer), name=f"peer_messages_{peer_id}")
-            self._peer_tasks[peer_id] = task
+            # Schedule peer message task after the connection handler returns (qasync-safe)
+            self.schedule_peer_message_task(peer)
             
-            # Add callback to clean up task when it's done
-            task.add_done_callback(lambda t: self._cleanup_peer_task(peer_id, t))
-                
         except Exception as e:
-            self.logger.error(f"Error handling connection: {e}")
-            if writer:
+            self.logger.error(f"Error handling new connection: {e}")
+            try:
                 writer.close()
                 await writer.wait_closed()
+            except:
+                pass
 
     async def handle_peer_list(self, message: Message, peer: Peer):
         """Handle peer list messages."""
@@ -369,7 +368,7 @@ class DHT:
             self.logger.error(f"Error starting peer message task for {peer_id}: {e}")
 
     async def connect_to_peer(self, host: str, port: int) -> Optional[Peer]:
-        """Connect to a peer."""
+        """Connect to a peer without starting background tasks (qasync-safe)."""
         async with self._connection_semaphore:  # Ensure only one connection at a time
             try:
                 # Create connection with timeout
@@ -411,8 +410,8 @@ class DHT:
                     self.logger.info(f"Notifying UI of new peer connection: {peer_id}")
                     self.on_peer_connected(peer)
                 
-                # Start message handling task safely
-                self._start_peer_message_task(peer, peer_id)
+                # DO NOT start message handling task here - let the UI do it after the slot returns
+                self.logger.info(f"Peer {peer_id} connected successfully, ready for message task start")
                     
                 return peer
                 
@@ -422,6 +421,26 @@ class DHT:
             except Exception as e:
                 self.logger.error(f"Error connecting to peer: {e}")
                 return None
+
+    def schedule_peer_message_task(self, peer: Peer):
+        """Schedule a peer message handling task to start after the current slot returns (qasync-safe)."""
+        try:
+            peer_id = peer.id
+            if peer_id in self._peer_tasks:
+                existing_task = self._peer_tasks[peer_id]
+                if not existing_task.done():
+                    self.logger.debug(f"Peer task for {peer_id} already exists and running")
+                    return
+            
+            # Schedule the task to start after the current slot returns
+            loop = asyncio.get_event_loop()
+            loop.call_soon(
+                lambda: self._start_peer_message_task(peer, peer_id)
+            )
+            self.logger.debug(f"Scheduled peer message task for {peer_id}")
+            
+        except Exception as e:
+            self.logger.error(f"Error scheduling peer message task for {peer.id}: {e}")
 
     def _cleanup_peer_task(self, peer_id: str, task: asyncio.Task):
         """Clean up peer task when it's done."""
