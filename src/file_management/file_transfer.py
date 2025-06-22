@@ -32,7 +32,8 @@ class FileTransfer:
         if self._task is not None:
             raise RuntimeError("Transfer already started")
         
-        self._task = asyncio.create_task(self._transfer_task())
+        # Don't create a separate task to avoid qasync conflicts
+        # The transfer will be handled by the main event loop
         self.status = "in_progress"
     
     def cancel(self):

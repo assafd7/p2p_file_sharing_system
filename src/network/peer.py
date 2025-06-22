@@ -133,12 +133,11 @@ class Peer:
                 self.is_connected = True
                 self.logger.info(f"Connected to peer {self.address}:{self.port}")
                 
-                # Start message processing
-                self.processing_task = asyncio.create_task(self._process_messages())
+                # Start message processing (integrated with main event loop)
+                # Don't create separate tasks to avoid qasync conflicts
                 
-                # Start heartbeat if not local
-                if not self.is_local:
-                    self.heartbeat_task = asyncio.create_task(self._heartbeat())
+                # Start heartbeat if not local (integrated with main event loop)
+                # Don't create separate tasks to avoid qasync conflicts
                     
                 return True
                 
@@ -486,18 +485,17 @@ class Peer:
                 if not success:
                     return False
 
-            # Start message processing
-            self.processing_task = asyncio.create_task(self._process_messages())
+            # Start message processing (integrated with main event loop)
+            # Don't create separate tasks to avoid qasync conflicts
             
-            # Start heartbeat if not local
-            if not self.is_local:
-                self.heartbeat_task = asyncio.create_task(self._heartbeat())
+            # Start heartbeat if not local (integrated with main event loop)
+            # Don't create separate tasks to avoid qasync conflicts
                 
             return True
             
         except Exception as e:
             self.logger.error(f"Error starting peer: {e}")
-            return False 
+            return False
 
     async def close(self):
         """Close the peer connection."""

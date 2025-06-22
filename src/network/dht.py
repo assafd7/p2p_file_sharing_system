@@ -103,8 +103,8 @@ class DHT:
             # Register message handlers
             self._register_message_handlers()
             
-            # Start periodic cleanup task
-            self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
+            # Start periodic cleanup as a background task (but don't create a separate task)
+            # We'll handle cleanup in the main event loop instead
             
             # Connect to bootstrap nodes if available
             if self.bootstrap_nodes:
@@ -146,14 +146,8 @@ class DHT:
         if self._running:
             self._running = False
             
-            # Cancel cleanup task
-            if self._cleanup_task:
-                self._cleanup_task.cancel()
-                try:
-                    await self._cleanup_task
-                except asyncio.CancelledError:
-                    pass
-                    
+            # No cleanup task to cancel since we removed it to avoid qasync conflicts
+            
             # Disconnect from all peers
             for peer_id in list(self.peers.keys()):
                 await self.remove_peer(peer_id)
@@ -262,11 +256,9 @@ class DHT:
             peer = Peer(reader, writer, peer_id)
             self.peers[peer_id] = peer
             
-            # Start message processing
-            asyncio.create_task(self._process_messages(peer))
-            
             # Send our username
             try:
+                self.logger.info(f"Sending username '{self.username}' to peer {peer_id}")
                 await self.send_message(
                     Message(
                         type=MessageType.USER_INFO,
@@ -275,6 +267,7 @@ class DHT:
                     ),
                     peer
                 )
+                self.logger.info(f"Successfully sent username to peer {peer_id}")
             except Exception as e:
                 self.logger.error(f"Error sending initial message to peer {peer_id}: {e}")
                 await self._handle_peer_disconnect(peer)
@@ -283,6 +276,9 @@ class DHT:
             # Notify UI
             if hasattr(self, 'on_peer_connected'):
                 self.on_peer_connected(peer)
+            
+            # Handle messages from this peer
+            await self._handle_peer_messages(peer)
                 
         except Exception as e:
             self.logger.error(f"Error handling connection: {e}")
@@ -337,9 +333,6 @@ class DHT:
             peer = Peer(reader, writer, peer_id)
             self.peers[peer_id] = peer
             
-            # Start message processing
-            asyncio.create_task(self._process_messages(peer))
-            
             # Send our username
             try:
                 self.logger.info(f"Sending username '{self.username}' to peer {peer_id}")
@@ -361,6 +354,9 @@ class DHT:
             if hasattr(self, 'on_peer_connected'):
                 self.logger.info(f"Notifying UI of new peer connection: {peer_id}")
                 self.on_peer_connected(peer)
+            
+            # Handle messages from this peer
+            await self._handle_peer_messages(peer)
                 
             return peer
             
@@ -688,54 +684,28 @@ class DHT:
         except Exception as e:
             self.logger.error(f"Error handling peer list: {e}")
 
-    async def _process_messages(self, peer: Peer):
-        """Process messages from a peer."""
+    async def _handle_peer_messages(self, peer: Peer):
+        """Handle messages from a peer in a qasync-compatible way."""
         try:
-            while True:
-                # Read message length
-                length_data = await peer.reader.read(4)
-                if not length_data:
-                    self.logger.info(f"Peer {peer.id} closed connection")
+            while peer.is_connected and not peer.is_disconnecting:
+                # Read message
+                message = await peer.read_message()
+                if not message:
                     break
                     
-                length = int.from_bytes(length_data, 'big')
-                self.logger.debug(f"Received message length {length} from peer {peer.id}")
-                
-                # Read message data
-                data = await peer.reader.read(length)
-                if not data:
-                    self.logger.info(f"Peer {peer.id} closed connection")
-                    break
-                    
-                # Parse message
-                try:
-                    message = Message.deserialize(data)
-                    self.logger.debug(f"Received message of type {message.type} from peer {peer.id}")
-                    self.logger.debug(f"Message payload: {message.payload}")
-                except Exception as e:
-                    self.logger.error(f"Error parsing message from peer {peer.id}: {e}")
-                    continue
-                
-                # Handle message
+                # Process message
                 if message.type in self.message_handlers:
-                    self.logger.debug(f"Handling message of type {message.type} from peer {peer.id}")
                     try:
                         await self.message_handlers[message.type](message, peer)
-                        self.logger.debug(f"Finished handling message of type {message.type} from peer {peer.id}")
                     except Exception as e:
-                        self.logger.error(f"Error in message handler for type {message.type}: {e}")
+                        self.logger.error(f"Error handling message: {e}")
                 else:
                     self.logger.warning(f"No handler for message type: {message.type}")
                     
-        except ConnectionError as e:
-            self.logger.info(f"Connection closed by peer {peer.id}: {e}")
         except Exception as e:
-            self.logger.error(f"Error processing messages from peer {peer.id}: {e}")
+            self.logger.error(f"Error in message handling loop: {e}")
         finally:
-            # Only clean up if the peer is still in our list
-            if peer.id in self.peers:
-                self.logger.debug(f"Cleaning up connection for peer {peer.id}")
-                await self._handle_peer_disconnect(peer)
+            await self._handle_peer_disconnect(peer)
 
     async def _handle_peer_disconnect(self, peer: Peer):
         """Handle peer disconnection."""
