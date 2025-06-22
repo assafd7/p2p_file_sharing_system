@@ -666,12 +666,14 @@ class MainWindow(QMainWindow):
     @qasync.asyncSlot()
     async def update_file_list(self):
         """Async update of the file list."""
-        self.file_list.clear()
         try:
+            self.file_list.clear()
             files = await self.file_manager.get_shared_files()
             for file in files:
                 item = QTreeWidgetItem([file.name, str(file.size), file.owner_name or "Unknown"])
                 self.file_list.addTopLevelItem(item)
+        except asyncio.CancelledError:
+            self.logger.info("update_file_list was cancelled (likely during shutdown)")
         except Exception as e:
             self.logger.error(f"Failed to update file list: {e}", exc_info=True)
 
@@ -696,18 +698,27 @@ class MainWindow(QMainWindow):
 
     @qasync.asyncSlot()
     async def on_file_metadata_received(self, metadata: FileMetadata, peer: Peer):
-        self.logger.info(f"Received metadata for {metadata.name} from {peer.id}, updating file list.")
-        self.update_file_list()
+        try:
+            self.logger.info(f"Received metadata for {metadata.name} from {peer.id}, updating file list.")
+            self.update_file_list()
+        except asyncio.CancelledError:
+            self.logger.info("on_file_metadata_received was cancelled (likely during shutdown)")
 
     @qasync.asyncSlot()
     async def on_peer_connected(self, peer: Peer):
-        self.logger.info(f"UI notified of peer connection: {peer.id}")
-        self.update_peer_list()
+        try:
+            self.logger.info(f"UI notified of peer connection: {peer.id}")
+            self.update_peer_list()
+        except asyncio.CancelledError:
+            self.logger.info("on_peer_connected was cancelled (likely during shutdown)")
 
     @qasync.asyncSlot()
     async def on_peer_disconnected(self, peer: Peer):
-        self.logger.info(f"UI notified of peer disconnect: {peer.id}")
-        self.update_peer_list()
+        try:
+            self.logger.info(f"UI notified of peer disconnect: {peer.id}")
+            self.update_peer_list()
+        except asyncio.CancelledError:
+            self.logger.info("on_peer_disconnected was cancelled (likely during shutdown)")
 
     def on_peer_updated(self, peer):
         """Handle peer update."""
