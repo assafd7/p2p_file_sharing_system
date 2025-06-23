@@ -749,7 +749,7 @@ class DHT:
 
     async def _handle_hello(self, message, peer):
         self.logger.info(f"Received HELLO from {peer.id}")
-        # Optionally update peer info/state here
-        # Send HELLO back if this is the first HELLO from this peer
-        hello_msg = Message.create(MessageType.HELLO, self.node_id, {"username": self.username})
-        await peer.send_message(hello_msg)
+        # Set the peer's username if present in the payload
+        if 'username' in message.payload:
+            peer.username = message.payload['username']
+        # Do not send a HELLO back; handshake is handled by Peer logic

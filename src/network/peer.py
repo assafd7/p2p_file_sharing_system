@@ -133,7 +133,7 @@ class Peer:
                 self.logger.info(f"Connected to peer {self.address}:{self.port}")
                 # Send HELLO message immediately after connecting, only once
                 if not self.hello_sent:
-                    hello_payload = {"username": self.username} if self.username else {}
+                    hello_payload = {"username": self.username or ""}
                     hello_msg = Message.create(MessageType.HELLO, self.id, hello_payload)
                     await self.send_message(hello_msg)
                     self.hello_sent = True
@@ -535,6 +535,9 @@ class Peer:
 
     async def _handle_hello(self, message):
         self.logger.info(f"Received HELLO from peer {self.id}")
+        # Set the peer's username if present in the payload
+        if 'username' in message.payload:
+            self.username = message.payload['username']
         if not self.hello_received:
             self.hello_received = True
             # Only send HELLO back if we haven't sent one yet
