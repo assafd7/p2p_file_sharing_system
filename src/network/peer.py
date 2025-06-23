@@ -1,37 +1,27 @@
 import asyncio
-import socket
 import hashlib
-from typing import Optional, Dict, Set, Callable, Awaitable
+import logging
+import struct
+import time
 from dataclasses import dataclass
 from datetime import datetime
-import logging
+from typing import Optional, Dict, Set, Callable, Awaitable
+
+# NOTE: This module is intended to be imported as part of the package, not run directly.
 from .protocol import (
-    Message, 
-    MessageType, 
-    ProtocolError, 
-    CHUNK_SIZE, 
-    CONNECTION_TIMEOUT, 
+    Message,
+    MessageType,
+    CONNECTION_TIMEOUT,
     READ_TIMEOUT,
     MAX_RETRIES,
     INITIAL_RETRY_DELAY,
-    MAX_RETRY_DELAY,
-    MAX_MESSAGE_SIZE,
-    MessageSizeError,
-    InvalidMessageError
+    MAX_MESSAGE_SIZE
 )
-import uuid
-import time
-import struct
 
 # Constants for timeouts and retries
-CONNECTION_TIMEOUT = 10.0  # seconds
-READ_TIMEOUT = 30.0  # seconds
-WRITE_TIMEOUT = 30.0  # seconds
 HEARTBEAT_INTERVAL = 30.0  # seconds
 HEARTBEAT_TIMEOUT = 10.0  # seconds
-INITIAL_RETRY_DELAY = 1.0  # seconds
-MAX_RETRIES = 3
-CHUNK_SIZE = 8192  # 8KB chunks for reading/writing
+WRITE_TIMEOUT = 30.0  # seconds
 
 @dataclass
 class PeerInfo:
@@ -213,7 +203,7 @@ class Peer:
             # Send message data
             self.writer.write(data)
             await self.writer.drain()
-
+            
             self.logger.debug(f"Successfully sent message of size {len(data)} bytes")
             return True
             

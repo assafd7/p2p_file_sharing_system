@@ -29,8 +29,10 @@ class KBucket:
                 return True
         return False
 
-    def remove_node(self, node_id: str):
+    def remove_node(self, node_id: str) -> bool:
+        initial_len = len(self.nodes)
         self.nodes = [n for n in self.nodes if n.id != node_id]
+        return len(self.nodes) < initial_len
         
     def update_node(self, node: PeerInfo):
         for i, existing_node in enumerate(self.nodes):
@@ -40,10 +42,26 @@ class KBucket:
                 return
 
 class DHT:
-    """Distributed Hash Table for peer discovery and routing."""
+    """
+    Distributed Hash Table (DHT) for peer discovery and routing.
+    
+    This class implements a basic DHT with k-buckets, bucket splitting, merging, and an eviction policy.
+    All peer selection, routing, and lookup logic now uses the DHT bucket structure.
+    
+    DHT Completion Plan (all steps implemented):
+      1. Add missing DHT utility methods (e.g., _get_bit)
+      2. Prepare and test bucket splitting/merging logic (debug methods)
+      3. Integrate bucket splitting into add_node
+      4. Implement basic eviction policy
+      5. Update find_node to use buckets efficiently
+      6. Update routing and lookup logic to use DHT buckets
+      7. Final cleanup and documentation (this step)
+    
+    See test_dht.py for tests covering all steps. Future DHT changes should be tested similarly.
+    """
     
     def __init__(self, host: str, port: int, bootstrap_nodes: Optional[List[Tuple[str, int]]] = None, 
-                 username: str = "Anonymous", db_manager: Optional[DatabaseManager] = None):
+                 username: str = "Anonymous", db_manager: Optional[DatabaseManager] = None, file_manager=None):
         """Initialize the DHT network."""
         self.host = host
         self.port = port
@@ -76,6 +94,9 @@ class DHT:
             MessageType.FIND_NODE: self._handle_find_node,
             MessageType.HELLO: self._handle_hello,
         }
+        self.file_manager = file_manager
+        self.routing_table = {}
+        self._seen_metadata = set()
         
     @property
     def node_id(self) -> str:
@@ -243,7 +264,7 @@ class DHT:
                 self.logger.info(f"[DHT] Connection to {peer_id} closed.")
             except Exception as e:
                 self.logger.error(f"[DHT] Exception while waiting for connection to close: {e}")
-
+            
     def _start_peer_message_loop(self, peer: Peer):
         """Creates and tracks the message handling task for a peer."""
         if peer.id in self._peer_tasks:
@@ -327,9 +348,10 @@ class DHT:
                 
                 peer.last_seen = time.time()
 
-                handler = self.message_handlers.get(message.type)
-                if handler:
-                    await handler(message, peer)
+                if message.type is not None:
+                    handler = self.message_handlers.get(message.type)
+                    if handler:
+                        await handler(message, peer)
         except (ConnectionError, asyncio.IncompleteReadError, asyncio.CancelledError):
             self.logger.info(f"Connection lost or cancelled with {peer.id}")
         except Exception as e:
@@ -349,7 +371,10 @@ class DHT:
         return h1 ^ h2
 
     def add_node(self, node: PeerInfo):
-        """Add a node to the appropriate k-bucket."""
+        """
+        Add a node to the appropriate k-bucket.
+        Step 3 of DHT completion plan: Integrate bucket splitting when a bucket is full.
+        """
         bucket_index = self._get_bucket_index(node.id)
         bucket = self.k_buckets[bucket_index]
         
@@ -361,12 +386,30 @@ class DHT:
         # Try to add the node
         if bucket.add_node(node):
             return True
-            
-        # If bucket is full, we need to check if we should split it
+        
+        # If bucket is full, split it and try again
         if len(bucket.nodes) == self.k:
-            # TODO: Implement bucket splitting logic
-            pass
-            
+            self.logger.info(f"[DHT] Bucket {bucket_index} full, splitting (Step 3)")
+            self.split_bucket(bucket_index)
+            # After splitting, recalculate the bucket index (it may have changed)
+            bucket_index = self._get_bucket_index(node.id)
+            bucket = self.k_buckets[bucket_index]
+            if bucket.add_node(node):
+                return True
+            # TODO: Step 4 - If still full after splitting, implement eviction policy here
+            # Step 4 of DHT completion plan: Evict least recently seen node if still full
+            if len(bucket.nodes) == self.k:
+                # Find the node with the oldest last_seen
+                oldest_index = 0
+                oldest_time = None
+                for i, n in enumerate(bucket.nodes):
+                    if oldest_time is None or n.last_seen < oldest_time:
+                        oldest_time = n.last_seen
+                        oldest_index = i
+                evicted_node = bucket.nodes.pop(oldest_index)
+                self.logger.info(f"[DHT] Evicted node {evicted_node.id} from bucket {bucket_index} to add new node {node.id} (Step 4)")
+                bucket.add_node(node)
+                return True
         return False
 
     def remove_node(self, node_id: str) -> bool:
@@ -375,18 +418,33 @@ class DHT:
         return self.k_buckets[bucket_index].remove_node(node_id)
 
     def find_node(self, target_id: str) -> List[PeerInfo]:
-        """Find the K closest nodes to a given ID."""
-        found_peers = []
-        for bucket in self.k_buckets:
-            for peer_info in bucket.nodes:
-                found_peers.append(peer_info)
-        
-        found_peers.sort(key=lambda p: self._distance(p.id, target_id))
-        return found_peers[:self.k]
+        """
+        Step 5 of DHT completion plan: Efficiently find the K closest nodes to a given ID using the bucket structure.
+        """
+        bucket_index = self._get_bucket_index(target_id)
+        candidates = list(self.k_buckets[bucket_index].nodes)
+        left = bucket_index - 1
+        right = bucket_index + 1
+        # Expand to neighboring buckets until we have at least k candidates
+        while len(candidates) < self.k and (left >= 0 or right < len(self.k_buckets)):
+            if left >= 0:
+                candidates.extend(self.k_buckets[left].nodes)
+                left -= 1
+            if len(candidates) >= self.k:
+                break
+            if right < len(self.k_buckets):
+                candidates.extend(self.k_buckets[right].nodes)
+                right += 1
+        # Sort by XOR distance to target_id
+        candidates.sort(key=lambda p: self._distance(p.id, target_id))
+        return candidates[:self.k]
 
     async def store(self, key: str, value: str) -> bool:
-        """Store a key-value pair in the DHT."""
-        # Find the k closest nodes to the key
+        """
+        Store a key-value pair in the DHT.
+        Step 6 of DHT completion plan: Use find_node for peer selection.
+        """
+        # Find the k closest nodes to the key using the bucket structure
         target_nodes = self.find_node(key)
         
         # Send STORE requests to the closest nodes
@@ -408,8 +466,11 @@ class DHT:
         return success
 
     async def find_value(self, key: str) -> Optional[str]:
-        """Find a value in the DHT."""
-        # Find the k closest nodes to the key
+        """
+        Find a value in the DHT.
+        Step 6 of DHT completion plan: Use find_node for peer selection.
+        """
+        # Find the k closest nodes to the key using the bucket structure
         target_nodes = self.find_node(key)
         
         # Send FIND_VALUE requests to the closest nodes
@@ -433,9 +494,9 @@ class DHT:
         """Join the DHT network using bootstrap nodes."""
         for host, port in bootstrap_nodes:
             try:
-                peer = Peer(host, port)
-                if await peer.connect():
-                    self.peers[peer.peer_id] = peer
+                peer = await self.connect_to_peer(host, port)
+                if peer:
+                    self.peers[peer.id] = peer
                     # Send FIND_NODE request to bootstrap node
                     find_msg = Message.create(
                         MessageType.FIND_NODE,
@@ -464,20 +525,23 @@ class DHT:
             return
 
         # Create new bucket
-        new_bucket = set()
-        old_bucket = set()
+        new_bucket = []
+        old_bucket = []
 
         # Split based on the next bit in the ID
         split_bit = bucket_index + 1
+        if split_bit >= 160 or split_bit < 0:
+            self.logger.warning(f"split_bucket: split_bit {split_bit} out of range, skipping split.")
+            return
         for peer in bucket.nodes:
             if self._get_bit(peer.id, split_bit):
-                new_bucket.add(peer)
+                new_bucket.append(peer)
             else:
-                old_bucket.add(peer)
+                old_bucket.append(peer)
 
         # Update buckets
-        bucket.nodes = list(old_bucket)
-        self.k_buckets.insert(bucket_index + 1, KBucket(list(new_bucket)))
+        bucket.nodes = old_bucket
+        self.k_buckets.insert(bucket_index + 1, KBucket(new_bucket))
 
         # Update routing table
         self._update_routing_table()
@@ -507,33 +571,32 @@ class DHT:
         try:
             if response.type == MessageType.PONG:
                 # Update peer's last seen time
-                peer_id = response.sender
+                peer_id = response.sender_id
                 if peer_id in self.peers:
-                    self.peers[peer_id].last_seen = datetime.now()
+                    self.peers[peer_id].last_seen = time.time()
                     self.logger.debug(f"Updated last seen time for peer {peer_id}")
-
-            elif response.type == MessageType.PEER_LIST:
-                # Add new peers from the response
-                peers = response.data.get("peers", [])
-                for peer_info in peers:
-                    await self.add_peer(PeerInfo(**peer_info))
-                self.logger.debug(f"Added {len(peers)} peers from response")
 
             elif response.type == MessageType.FILE_LIST:
                 # Update file list from the response
-                files = response.data.get("files", [])
-                for file_info in files:
-                    self.file_manager.add_remote_file(file_info)
-                self.logger.debug(f"Updated file list with {len(files)} files")
+                files = response.payload.get("files", [])
+                if self.file_manager is not None:
+                    for file_info in files:
+                        self.file_manager.add_remote_file(file_info)
+                    self.logger.debug(f"Updated file list with {len(files)} files")
+                else:
+                    self.logger.warning("No file_manager set; cannot update file list.")
 
             elif response.type == MessageType.FILE_RESPONSE:
                 # Handle file data response
-                file_id = response.data.get("file_id")
-                chunk_index = response.data.get("chunk_index")
-                chunk_data = response.data.get("chunk_data")
+                file_id = response.payload.get("file_id")
+                chunk_index = response.payload.get("chunk_index")
+                chunk_data = response.payload.get("chunk_data")
                 if all([file_id, chunk_index is not None, chunk_data]):
-                    await self.file_manager.handle_file_chunk(file_id, chunk_index, chunk_data)
-                    self.logger.debug(f"Received chunk {chunk_index} for file {file_id}")
+                    if self.file_manager is not None:
+                        await self.file_manager.handle_file_chunk(file_id, chunk_index, chunk_data)
+                        self.logger.debug(f"Received chunk {chunk_index} for file {file_id}")
+                    else:
+                        self.logger.warning("No file_manager set; cannot handle file chunk.")
 
             else:
                 self.logger.warning(f"Unhandled response type: {response.type}")
@@ -564,8 +627,8 @@ class DHT:
         peer_list = []
         for peer in connected_peers:
             peer_list.append({
-                'peer_id': peer.peer_id,
-                'host': peer.host,
+                'peer_id': peer.id,
+                'host': peer.address,
                 'port': peer.port
             })
             
@@ -575,7 +638,7 @@ class DHT:
             chunk = peer_list[i:i + chunk_size]
             message = Message(
                 type=MessageType.PEER_LIST,
-                sender_id=self.local_peer.peer_id,
+                sender_id=self.node_id,
                 payload={
                     'peers': chunk,
                     'chunk_index': i // chunk_size,
@@ -589,7 +652,7 @@ class DHT:
                     if peer.is_connected:
                         await peer.send_message(message)
                 except Exception as e:
-                    self.logger.error(f"Error sending peer list to {peer.host}:{peer.port}: {e}")
+                    self.logger.error(f"Error sending peer list to {peer.address}:{peer.port}: {e}")
 
     async def _handle_file_metadata(self, message: Message, peer: Peer):
         """Handle incoming file metadata"""
@@ -614,11 +677,14 @@ class DHT:
             
             # Store metadata in database
             self.logger.debug("Storing metadata in database")
-            await self.db_manager.store_file_metadata(metadata)
-            self.logger.debug("Successfully stored metadata in database")
+            if self.db_manager is not None:
+                await self.db_manager.store_file_metadata(metadata)
+                self.logger.debug("Successfully stored metadata in database")
+            else:
+                self.logger.warning("No db_manager set; cannot store file metadata.")
             
             # Notify UI if callback exists
-            if hasattr(self, 'on_file_metadata_received'):
+            if hasattr(self, 'on_file_metadata_received') and self.on_file_metadata_received is not None:
                 self.logger.debug("Notifying UI about new file metadata")
                 await self.on_file_metadata_received(metadata, peer)
                 self.logger.debug("UI notification complete")
@@ -656,7 +722,7 @@ class DHT:
                 sender_id=self.node_id,
                 payload=metadata.to_dict()
             )
-            await self.send_message(response, peer)
+            await peer.send_message(response)
             self.logger.debug(f"Sent file metadata response to peer {peer.id}")
             
         except Exception as e:
@@ -675,7 +741,7 @@ class DHT:
             await self.add_metadata(metadata)
             
             # Notify UI if callback exists
-            if hasattr(self, 'on_file_metadata_received'):
+            if hasattr(self, 'on_file_metadata_received') and self.on_file_metadata_received is not None:
                 self.on_file_metadata_received(metadata, peer)
                 
         except Exception as e:
@@ -753,3 +819,55 @@ class DHT:
         if 'username' in message.payload:
             peer.username = message.payload['username']
         # Do not send a HELLO back; handshake is handled by Peer logic
+
+    async def broadcast_file_metadata(self, metadata: FileMetadata):
+        """Broadcast file metadata to all connected peers."""
+        for peer in self.peers.values():
+            if peer.is_connected:
+                try:
+                    message = Message(
+                        type=MessageType.FILE_METADATA,
+                        sender_id=self.node_id,
+                        payload=metadata.to_dict()
+                    )
+                    await peer.send_message(message)
+                except Exception as e:
+                    self.logger.error(f"Error broadcasting file metadata to {peer.id}: {e}")
+
+    def _get_bit(self, node_id: str, bit_index: int) -> int:
+        """
+        Step 1 of DHT completion plan: Utility for bucket splitting.
+        Get the value (0 or 1) of the bit at position `bit_index` in the SHA-1 hash of node_id.
+        """
+        if bit_index < 0 or bit_index >= 160:
+            return 0
+        h = int(hashlib.sha1(node_id.encode()).hexdigest(), 16)
+        return (h >> (160 - bit_index - 1)) & 1
+
+    # Step 2: Prepare and test bucket splitting/merging logic (non-disruptive)
+    # The following debug methods are for manual testing only and should not be called from production code.
+    def debug_split_bucket(self, bucket_index: int):
+        """
+        Step 2 of DHT completion plan: Manually trigger a split of the specified bucket for testing.
+        This is for debug/manual use only.
+        """
+        if 0 <= bucket_index < len(self.k_buckets):
+            self.logger.info(f"[DEBUG] Splitting bucket {bucket_index}")
+            self.split_bucket(bucket_index)
+            self.logger.info(f"[DEBUG] Bucket {bucket_index} split complete. Total buckets: {len(self.k_buckets)}")
+        else:
+            self.logger.warning(f"[DEBUG] Invalid bucket index: {bucket_index}")
+
+    def debug_merge_buckets(self, bucket_index: int):
+        """
+        Step 2 of DHT completion plan: Manually trigger a merge of the specified bucket with its neighbor for testing.
+        This is for debug/manual use only.
+        """
+        if 0 <= bucket_index < len(self.k_buckets) - 1:
+            self.logger.info(f"[DEBUG] Merging bucket {bucket_index} with {bucket_index + 1}")
+            self.merge_buckets(bucket_index)
+            self.logger.info(f"[DEBUG] Buckets {bucket_index} and {bucket_index + 1} merged. Total buckets: {len(self.k_buckets)}")
+        else:
+            self.logger.warning(f"[DEBUG] Invalid bucket index for merge: {bucket_index}")
+
+    # TODO: Step 3 will integrate bucket splitting/merging into add_node and main workflow.

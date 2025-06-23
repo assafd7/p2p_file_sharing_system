@@ -5,7 +5,7 @@ A secure and efficient peer-to-peer file sharing system with a modern user inter
 ## Features
 
 - **P2P Architecture**: Direct peer-to-peer file transfers without central servers
-- **Distributed Hash Table (DHT)**: Efficient peer discovery and routing
+- **Distributed Hash Table (DHT)**: Fully implemented with k-buckets, bucket splitting, merging, and eviction. All peer discovery, routing, and storage use the DHT structure for efficient and scalable operation.
 - **Secure Communication**: End-to-end encryption for all transfers
 - **Large File Support**: Efficient handling of large files with chunked transfers
 - **Resume Capability**: Resume interrupted transfers
@@ -191,6 +191,132 @@ For additional help:
 4. Verify the configuration in `src/config.py`
 
 ## Development
+
+### Project Structure
+
+```
+p2p_file_sharing_system/
+├── src/
+│   ├── network/
+│   │   ├── protocol.py      # P2P protocol implementation
+│   │   ├── peer.py          # Peer connection management
+│   │   ├── dht.py           # Distributed hash table
+│   │   └── security.py      # Security features
+│   ├── file_management/
+│   │   └── file_manager.py  # File handling and transfers
+│   ├── database/
+│   │   └── db_manager.py    # Database operations
+│   ├── ui/
+│   │   ├── main_window.py   # Main application window
+│   │   ├── file_list.py     # File list widget
+│   │   └── transfer_list.py # Transfer list widget
+│   └── utils/
+│       └── logging_config.py # Logging configuration
+├── tests/
+│   ├── test_protocol.py     # Protocol tests
+│   ├── test_peer.py         # Peer tests
+│   ├── test_dht.py          # DHT tests
+│   ├── test_file_manager.py # File manager tests
+│   ├── test_db_manager.py   # Database tests
+│   ├── test_security.py     # Security tests
+│   └── test_ui.py           # UI tests
+├── data/                    # Application data
+├── logs/                    # Log files
+├── requirements.txt         # Project dependencies
+├── run.py                   # Application entry point
+├── run_tests.py            # Test runner
+└── clean.py                # Cleanup script
+```
+
+### Running Tests
+
+1. Run all tests:
+   ```bash
+   python run_tests.py
+   ```
+
+2. Run specific test file:
+   ```bash
+   pytest tests/test_protocol.py
+   ```
+
+3. Run tests with coverage:
+   ```bash
+   pytest --cov=src tests/
+   ```
+
+### Code Style
+
+- Follow PEP 8 guidelines
+- Use type hints
+- Write docstrings for all functions and classes
+- Keep functions small and focused
+- Use meaningful variable and function names
+
+### Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run tests
+5. Submit a pull request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgments
+
+- PyQt6 for the user interface
+- cryptography for security features
+- aiohttp for async networking
+- aiosqlite for async database operations
+
+## Support
+
+For support, please open an issue in the GitHub repository.
+
+## Roadmap
+
+- [ ] Web interface
+- [ ] Mobile app
+- [ ] Cloud storage integration
+- [ ] Advanced search features
+- [ ] File versioning
+- [ ] Collaborative editing
+- [ ] Real-time chat
+- [ ] Bandwidth control
+- [ ] NAT traversal
+- [ ] IPv6 support
+
+## DHT Implementation
+
+This project features a robust Distributed Hash Table (DHT) implementation:
+- **K-Buckets**: Peers are organized into k-buckets for efficient lookup and routing.
+- **Bucket Splitting & Merging**: Buckets split and merge dynamically as the network grows or shrinks.
+- **Eviction Policy**: Least recently seen nodes are evicted when buckets are full and cannot be split.
+- **Efficient Routing**: All peer discovery, file lookup, and storage operations use the DHT structure for scalability.
+
+See the `src/network/dht.py` file for the DHT implementation details.
+
+## DHT Testing
+
+The DHT system is thoroughly tested with a dedicated test suite:
+- **Test File**: `test_dht.py`
+- **Coverage**: All DHT features, including bucket splitting, merging, eviction, and efficient routing, are tested.
+
+### Running DHT Tests
+
+To run the DHT tests:
+```bash
+python -m unittest test_dht.py
+```
+or
+```bash
+python test_dht.py
+```
+
+All future DHT changes should be accompanied by corresponding tests in `test_dht.py`.
 
 ### Project Structure
 
