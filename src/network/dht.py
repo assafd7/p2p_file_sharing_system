@@ -252,8 +252,6 @@ class DHT:
                 writer.close(); await writer.wait_closed(); return
 
             peer = Peer(reader, writer, peer_id)
-            peer.username = self.username  # Ensure username is set before connect
-            peer.is_connected = True  # Mark incoming connection as connected
             self.peers[peer_id] = peer
             self.logger.info(f"[DHT] Added peer {peer_id} to self.peers. Total peers: {len(self.peers)}")
             self.add_node(PeerInfo(id=peer.id, address=peer.address, port=peer.port, last_seen=datetime.now()))
@@ -286,7 +284,6 @@ class DHT:
             async with self._connection_semaphore:
                 reader, writer = await asyncio.open_connection(host, port)
                 peer = Peer(reader, writer, peer_id)
-                peer.username = self.username  # Ensure username is set before connect
                 if not await peer.connect():
                     self.logger.error(f"Peer.connect() failed for {peer_id}")
                     return None
