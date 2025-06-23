@@ -303,6 +303,7 @@ class DHT:
         """Schedule a peer message handling task to start after the current slot returns (qasync-safe)."""
         try:
             peer_id = peer.id
+            # Only schedule if not already present
             if peer_id in self._peer_tasks:
                 existing_task = self._peer_tasks[peer_id]
                 if not existing_task.done():
@@ -310,7 +311,9 @@ class DHT:
                     return
             def schedule_task():
                 loop = asyncio.get_event_loop()
-                loop.create_task(self._handle_peer_messages_loop(peer))
+                task = loop.create_task(self._handle_peer_messages_loop(peer))
+                self._peer_tasks[peer_id] = task
+                task.add_done_callback(lambda t: self._peer_tasks.pop(peer_id, None))
             self.logger.debug(f"Scheduled peer message task for {peer_id}")
             QTimer.singleShot(0, schedule_task)
         except Exception as e:
