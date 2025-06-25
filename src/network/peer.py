@@ -41,6 +41,7 @@ class Peer:
         self.address = writer.get_extra_info('peername')[0]
         self.port = writer.get_extra_info('peername')[1]
         self.username = None
+        self.remote_username = None  # Store the username of the remote peer
         self.last_seen = time.time()
         self.is_connected = False  # Only set to True after successful connect
         self.logger = logging.getLogger(__name__)
@@ -525,9 +526,10 @@ class Peer:
 
     async def _handle_hello(self, message):
         self.logger.info(f"Received HELLO from peer {self.id}")
-        # Set the peer's username if present in the payload
+        # Set the remote peer's username if present in the payload
         if 'username' in message.payload:
-            self.username = message.payload['username']
+            self.logger.debug(f"Received username in HELLO: {message.payload['username']}")
+            self.remote_username = message.payload['username']
         if not self.hello_received:
             self.hello_received = True
             # Only send HELLO back if we haven't sent one yet

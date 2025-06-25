@@ -869,7 +869,8 @@ class MainWindow(QMainWindow):
                         username = peer_info.get('username', 'Unknown')
                         self.logger.info(f"Using username from database: {username}")
                     else:
-                        username = peer.username if hasattr(peer, 'username') else 'Unknown'
+                        # Use remote_username if available, else username, else 'Unknown'
+                        username = getattr(peer, 'remote_username', None) or getattr(peer, 'username', None) or 'Unknown'
                         self.logger.info(f"Using username from peer object: {username}")
                     
                     # Add peer to list
